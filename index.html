@@ -1017,13 +1017,20 @@ function App(){
       us=(us||[]).filter(u=>u.role!=="system");
       // Purge old demo accounts
       us=us.filter(u=>!OLD_DEMO_IDS.includes(u.id));
-      // Merge in any seed users not yet in storage (preserves saved PINs/depts)
+      // Merge in any seed users not yet in DB
       const storedIds=new Set(us.map(u=>u.id));
       SEED_USERS.forEach(s=>{if(!storedIds.has(s.id))us.push(s);});
-      // Migration: ensure all staff have a pin field
-      let needsSave=false;
+      // Passwords are never stored in Supabase — merge them back from SEED_USERS
+      // and from localStorage (where admin may have set custom passwords)
+      const pwStore=JSON.parse(localStorage.getItem("oi_passwords")||"{}");
       us=us.map(u=>{
-        if(u.role==="staff"&&u.pin===undefined){needsSave=true;return{...u,pin:"0000"};}
+        const seed=SEED_USERS.find(s=>s.id===u.id);
+        const pw=pwStore[u.id]||seed?.password||"pass123";
+        return{...u,password:pw};
+      });
+      // Migration: ensure all staff have a pin field
+      us=us.map(u=>{
+        if(u.role==="staff"&&u.pin===undefined)return{...u,pin:"0000"};
         return u;
       });
       await Promise.all(us.map(u=>DB.upsertUser(u)));
@@ -1051,8 +1058,21 @@ function App(){
   },[records]);
 
   const handleSaveCoords=useCallback(async(coords)=>{setInnCoords(coords);await DB.setCoords(coords);},[]);
-  const handleAddUser=useCallback(async(u)=>{const up=[...users,u];setUsers(up);await DB.upsertUser(u);},[users]);
-  const handleDeleteUser=useCallback(async(id)=>{const up=users.filter(u=>u.id!==id);setUsers(up);await DB.deleteUser(id);},[users]);
+  const handleAddUser=useCallback(async(u)=>{
+    const up=[...users,u];setUsers(up);
+    // Save password to localStorage since we don't store it in Supabase
+    const pwStore=JSON.parse(localStorage.getItem("oi_passwords")||"{}");
+    pwStore[u.id]=u.password;
+    localStorage.setItem("oi_passwords",JSON.stringify(pwStore));
+    await DB.upsertUser(u);
+  },[users]);
+  const handleDeleteUser=useCallback(async(id)=>{
+    const up=users.filter(u=>u.id!==id);setUsers(up);
+    const pwStore=JSON.parse(localStorage.getItem("oi_passwords")||"{}");
+    delete pwStore[id];
+    localStorage.setItem("oi_passwords",JSON.stringify(pwStore));
+    await DB.deleteUser(id);
+  },[users]);
   const handleUpdateUser=useCallback(async(id,changes)=>{
     const up=users.map(u=>u.id===id?{...u,...changes}:u);
     setUsers(up);await DB.upsertUser({...users.find(u=>u.id===id),...changes,id});
