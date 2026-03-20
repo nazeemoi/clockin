@@ -79,7 +79,9 @@ const DB = {
     return data;
   },
   async upsertUser(u){
-    const{error}=await sb.from("users").upsert(u,{onConflict:"id"});
+    // Never store password in Supabase — keep it in app state only
+    const{password:_,...safe}=u;
+    const{error}=await sb.from("users").upsert(safe,{onConflict:"id"});
     if(error)console.error("upsertUser",error);
   },
   async deleteUser(id){
@@ -97,7 +99,7 @@ const DB = {
     const{error}=await sb.from("clock_records").insert({
       id:rec.id, user_id:rec.userId, user_name:rec.userName,
       type:rec.type, timestamp:rec.timestamp,
-      lat:rec.lat, lng:rec.lng, on_site:rec.onSite
+      lat:rec.lat??null, lng:rec.lng??null, on_site:rec.onSite??null
     });
     if(error)console.error("insertRecord",error);
   },
