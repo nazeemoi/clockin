@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+  <meta name="apple-mobile-web-app-title" content="OI Time Clock"/>
+  <meta name="theme-color" content="#f5f5f7"/>
+  <title>Ocean Island Inn · Staff Time Clock</title>
+  <link rel="manifest" href="manifest.json"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { min-height: 100%; background: #f5f5f7; }
+    body { -webkit-tap-highlight-color: transparent; font-family: sans-serif; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+const DEFAULT_INN = { lat: 48.4275979, lng: -123.3620201 };
+const RADIUS_M    = 30;
+const LOGO_URL    = "https://d3no58tkbpefzl.cloudfront.net/OILogo.png";
+const DEPARTMENTS  = ["Front Desk Supervisors","Front Desk Agents","Graves","Housekeeping"];
+
+const SEED_USERS = [
+  { id:"admin",      username:"admin",     name:"Manager",          password:"admin123", pin:"",     role:"admin",  departments:[] },
+  { id:"asadu",      username:"asadu",     name:"Asadu",            password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"asha",       username:"asha",      name:"Asha",             password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"agustina",   username:"agustina",  name:"Agustina (Wu)",    password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"angela",     username:"angela",    name:"Angela (Ange)",    password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"bri",        username:"bri",       name:"Bri",              password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"charlie",    username:"charlie",   name:"Charlie",          password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"elizabeth",  username:"elizabeth", name:"Elizabeth",        password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"emma",       username:"emma",      name:"Emma",             password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"faren",      username:"faren",     name:"Faren",            password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"gursharn",   username:"gursharn",  name:"Gursharn",         password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"jane",       username:"jane",      name:"Jane",             password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"jasleen",    username:"jasleen",   name:"Jasleen",          password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"jessica",    username:"jessica",   name:"Jessica",          password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"johnny",     username:"johnny",    name:"Johnny",           password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"lana",       username:"lana",      name:"Lana",             password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"madi",       username:"madi",      name:"Madi",             password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"marc",       username:"marc",      name:"Marc",             password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"maya",       username:"maya",      name:"Maya",             password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"michealle",  username:"michealle", name:"Michealle",        password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"nathan",     username:"nathan",    name:"Nathan",           password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"nisha",      username:"nisha",     name:"Nisha",            password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"nazeem",     username:"nazeem",    name:"Nazeem",           password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"polina",     username:"polina",    name:"Polina",           password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"rewan",      username:"rewan",     name:"Rewan",            password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"shivang",    username:"shivang",   name:"Shivang",          password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"twinkle",    username:"twinkle",   name:"Twinkle",          password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+  { id:"yannick",    username:"yannick",   name:"Yannick",          password:"pass123",  pin:"0000", role:"staff",  departments:[] },
+];
+
+// IDs of old demo accounts to purge if found in storage
+const OLD_DEMO_IDS = ["alice","bob","carol","david"];
+
+// ── Storage ───────────────────────────────────────────────────────────────────
+// ── Supabase client ───────────────────────────────────────────────────────────
+const SUPABASE_URL = "https://lvaiyxohmxbpseqbvqqx.supabase.co";
+const SUPABASE_KEY = "sb_publishable_7ZExF6cTHwgLzQPiCa3HCw_s8DyOprF";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ── DB helpers ────────────────────────────────────────────────────────────────
+const DB = {
+  // Users
+  async getUsers(){
+    const{data,error}=await sb.from("users").select("*");
+    if(error){console.error("getUsers",error);return null;}
+    return data;
+  },
+  async upsertUser(u){
+    const{error}=await sb.from("users").upsert(u,{onConflict:"id"});
+    if(error)console.error("upsertUser",error);
+  },
+  async deleteUser(id){
+    const{error}=await sb.from("users").delete().eq("id",id);
+    if(error)console.error("deleteUser",error);
+  },
+  // Clock records
+  async getRecords(){
+    const{data,error}=await sb.from("clock_records").select("*").order("timestamp",{ascending:true});
+    if(error){console.error("getRecords",error);return null;}
+    // normalise to app shape
+    return(data||[]).map(r=>({id:r.id,userId:r.user_id,userName:r.user_name,type:r.type,timestamp:r.timestamp,lat:r.lat,lng:r.lng,onSite:r.on_site}));
+  },
+  async insertRecord(rec){
+    const{error}=await sb.from("clock_records").insert({
+      id:rec.id, user_id:rec.userId, user_name:rec.userName,
+      type:rec.type, timestamp:rec.timestamp,
+      lat:rec.lat, lng:rec.lng, on_site:rec.onSite
+    });
+    if(error)console.error("insertRecord",error);
+  },
+  // Journal
+  async getJournal(){
+    const{data,error}=await sb.from("journal_entries").select("*").order("created_at",{ascending:true});
+    if(error){console.error("getJournal",error);return null;}
+    return(data||[]).map(e=>({id:e.id,body:e.body,departments:e.departments||[],authorName:e.author_name,createdAt:e.created_at}));
+  },
+  async insertJournal(e){
+    const{error}=await sb.from("journal_entries").insert({
+      id:e.id, body:e.body, departments:e.departments,
+      author_name:e.authorName, created_at:e.createdAt
+    });
+    if(error)console.error("insertJournal",error);
+  },
+  async deleteJournal(id){
+    const{error}=await sb.from("journal_entries").delete().eq("id",id);
+    if(error)console.error("deleteJournal",error);
+  },
+  // Settings (stored as a special user row)
+  async getCoords(){
+    const{data}=await sb.from("users").select("pin").eq("id","__coords__").single();
+    if(!data)return null;
+    try{return JSON.parse(data.pin);}catch{return null;}
+  },
+  async setCoords(coords){
+    await sb.from("users").upsert({id:"__coords__",username:"__coords__",name:"__coords__",role:"system",pin:JSON.stringify(coords)},{onConflict:"id"});
+  },
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function haversineM(la1,lo1,la2,lo2){const R=6371000,dLa=((la2-la1)*Math.PI)/180,dLo=((lo2-lo1)*Math.PI)/180,a=Math.sin(dLa/2)**2+Math.cos((la1*Math.PI)/180)*Math.cos((la2*Math.PI)/180)*Math.sin(dLo/2)**2;return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));}
+function mkId(){return Math.random().toString(36).slice(2)+Date.now().toString(36);}
+function fmtTime(iso){return new Date(iso).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});}
+function fmtDate(iso){return new Date(iso).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"});}
+function fmtDateShort(iso){return new Date(iso).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});}
+function dur(a,b){if(!a||!b)return null;const ms=new Date(b)-new Date(a),h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000);return`${h}h ${m}m`;}
+
+function buildPairs(records,filterUserId){
+  const byUser={};
+  records.filter(r=>!filterUserId||r.userId===filterUserId)
+    .sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp))
+    .forEach(r=>{(byUser[r.userId]=byUser[r.userId]||[]).push(r);});
+  const pairs=[];
+  Object.values(byUser).forEach(recs=>{
+    let open=null;
+    recs.forEach(r=>{
+      if(r.type==="in"){if(open)pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:null,onSite:open.onSite});open=r;}
+      else if(r.type==="out"&&open){pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:r.timestamp,onSite:open.onSite});open=null;}
+    });
+    if(open)pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:null,onSite:open.onSite});
+  });
+  return pairs.sort((a,b)=>new Date(b.inTime)-new Date(a.inTime));
+}
+
+function exportCSV(records){
+  const pairs=buildPairs(records);
+  const hdr="Staff,Date,Clock In,Clock Out,Duration,Status\n";
+  const rows=pairs.map(p=>[p.name,fmtDate(p.inTime),fmtTime(p.inTime),p.outTime?fmtTime(p.outTime):"Still In",p.outTime?dur(p.inTime,p.outTime):"",p.onSite===null?"No GPS":p.onSite?"On-Site":"Remote"].join(",")).join("\n");
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([hdr+rows],{type:"text/csv"}));a.download=`OceanIslandInn_${new Date().toISOString().slice(0,10)}.csv`;a.click();
+}
+
+// ── Theme: Apple Clarity ──────────────────────────────────────────────────────
+const C={bg:"#f5f5f7",card:"#ffffff",border:"#e8e8ed",text:"#1d1d1f",sub:"#6e6e73",muted:"#a1a1a6",blue:"#0071e3",green:"#28cd41",greenText:"#1a8a2e",red:"#ff3b30",warn:"#ff9f0a"};
+const inp=(x={})=>({background:"#fff",border:"1px solid #d2d2d7",borderRadius:10,color:C.text,padding:"0.72rem 1rem",fontFamily:"'DM Sans',sans-serif",fontSize:"0.93rem",outline:"none",width:"100%",...x});
+const lbl={display:"block",color:C.sub,fontSize:"0.71rem",letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:"0.4rem",marginTop:"1.2rem"};
+const TH={background:"#f5f5f7",color:C.sub,fontSize:"0.69rem",letterSpacing:"0.06em",textTransform:"uppercase",padding:"0.72rem 1.2rem",textAlign:"left",fontWeight:600,borderBottom:"1px solid #e8e8ed"};
+const TD={padding:"0.85rem 1.2rem",borderBottom:"1px solid #f0f0f5",color:C.text,fontSize:"0.875rem"};
+const cardStyle={background:C.card,border:"1px solid #e8e8ed",borderRadius:18,overflow:"hidden",boxShadow:"0 2px 20px rgba(0,0,0,0.06)"};
+const secH={color:C.text,fontSize:"1.05rem",fontWeight:600,marginBottom:"1rem"};
+const btnPrimary={background:C.blue,border:"none",borderRadius:980,color:"#fff",padding:"0.72rem 1.6rem",fontFamily:"'DM Sans',sans-serif",fontWeight:500,fontSize:"0.88rem",cursor:"pointer"};
+const btnGhost={background:"#f5f5f7",border:"1px solid #e8e8ed",borderRadius:980,color:C.text,padding:"0.38rem 0.9rem",fontFamily:"'DM Sans',sans-serif",fontSize:"0.8rem",fontWeight:500,cursor:"pointer"};
+const btnDanger={background:"rgba(255,59,48,0.08)",border:"1px solid rgba(255,59,48,0.22)",borderRadius:8,color:C.red,padding:"0.38rem 0.85rem",fontFamily:"'DM Sans',sans-serif",fontSize:"0.8rem",fontWeight:600,cursor:"pointer"};
+
+// ── Small components ──────────────────────────────────────────────────────────
+function SiteBadge({onSite}){
+  const b={display:"inline-block",padding:"0.18rem 0.6rem",borderRadius:20,fontSize:"0.67rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.04em"};
+  if(onSite===null||onSite===undefined)return <span style={{...b,background:"#f5f5f7",color:C.muted,border:"1px solid #e8e8ed"}}>No GPS</span>;
+  if(onSite)return <span style={{...b,background:"rgba(40,205,65,0.1)",color:C.greenText,border:"1px solid rgba(40,205,65,0.28)"}}>On-Site</span>;
+  return <span style={{...b,background:"rgba(255,59,48,0.08)",color:"#d93025",border:"1px solid rgba(255,59,48,0.22)"}}>⚠ Remote</span>;
+}
+function RoleBadge({role}){
+  if(role==="admin")return <span style={{background:C.blue,color:"#fff",fontSize:"0.62rem",fontWeight:600,letterSpacing:"0.04em",textTransform:"uppercase",padding:"0.18rem 0.55rem",borderRadius:20}}>Admin</span>;
+  return <span style={{background:"#f0f0f5",color:C.sub,fontSize:"0.62rem",fontWeight:600,letterSpacing:"0.04em",textTransform:"uppercase",padding:"0.18rem 0.55rem",borderRadius:20,border:"1px solid #e8e8ed"}}>Staff</span>;
+}
+function DeptPill({dept}){
+  const colors={"Front Desk Supervisors":["#e8f0fe","#1a56db"],"Front Desk Agents":["#e0f7fa","#00838f"],"Graves":["#f3e8fd","#7c3aed"],"Housekeeping":["#fef3c7","#b45309"]};
+  const[bg,tx]=colors[dept]||["#f5f5f7",C.sub];
+  return <span style={{display:"inline-block",background:bg,color:tx,fontSize:"0.65rem",fontWeight:600,padding:"0.15rem 0.5rem",borderRadius:20,whiteSpace:"nowrap"}}>{dept}</span>;
+}
+function LiveClock(){
+  const[now,setNow]=useState(new Date());
+  useEffect(()=>{const t=setInterval(()=>setNow(new Date()),1000);return()=>clearInterval(t);},[]);
+  return <div style={{fontSize:"3rem",fontWeight:300,color:C.text,letterSpacing:"-0.03em",lineHeight:1}}>{now.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</div>;
+}
+
+// ── ShiftTable ────────────────────────────────────────────────────────────────
+function ShiftTable({pairs,showName=false,showBadge=false}){
+  if(!pairs.length)return <div style={{textAlign:"center",padding:"2.5rem",color:C.muted,fontSize:"0.88rem"}}>No shifts recorded yet.</div>;
+  return(
+    <div style={{overflowX:"auto"}}>
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <thead><tr>
+          {showName&&<th style={TH}>Staff</th>}
+          <th style={TH}>Date</th><th style={TH}>In</th><th style={TH}>Out</th><th style={TH}>Duration</th>
+          {showBadge&&<th style={TH}>Location</th>}
+        </tr></thead>
+        <tbody>{pairs.map((p,i)=>(
+          <tr key={i} style={{background:i%2===0?"#fff":"#fafafa"}}>
+            {showName&&<td style={{...TD,fontWeight:500}}>{p.name}</td>}
+            <td style={{...TD,color:C.sub,fontSize:"0.8rem"}}>{fmtDate(p.inTime)}</td>
+            <td style={TD}>{fmtTime(p.inTime)}</td>
+            <td style={TD}>{p.outTime?fmtTime(p.outTime):<span style={{color:C.green,fontSize:"0.78rem",fontWeight:500}}>● Active</span>}</td>
+            <td style={{...TD,color:C.sub,fontSize:"0.8rem"}}>{p.outTime?dur(p.inTime,p.outTime):"—"}</td>
+            {showBadge&&<td style={TD}><SiteBadge onSite={p.onSite}/></td>}
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Journal swipe card ────────────────────────────────────────────────────────
+function JournalCard({entry,onRead}){
+  const cardRef=useRef(null);
+  const startX=useRef(null);
+  const[dx,setDx]=useState(0);
+  const[dismissing,setDismissing]=useState(false);
+
+  const onPointerDown=(e)=>{startX.current=e.clientX;cardRef.current?.setPointerCapture(e.pointerId);};
+  const onPointerMove=(e)=>{if(startX.current===null)return;const d=e.clientX-startX.current;if(d>0)setDx(d);};
+  const onPointerUp=()=>{
+    if(dx>100){setDismissing(true);setTimeout(()=>{onRead(entry.id);setDx(0);setDismissing(false);},320);}
+    else setDx(0);
+    startX.current=null;
+  };
+
+  const progress=Math.min(dx/130,1);
+  const tx=dismissing?440:dx;
+  const opacity=dismissing?0:1;
+
+  return(
+    <div ref={cardRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={()=>{setDx(0);startX.current=null;}}
+      style={{position:"absolute",top:0,left:0,right:0,background:"#fff",borderRadius:20,border:"1px solid #e8e8ed",
+        boxShadow:"0 4px 28px rgba(0,0,0,0.09)",padding:"1.5rem 1.6rem 1.3rem",
+        transform:`translateX(${tx}px) rotate(${progress*6}deg)`,opacity,
+        transition:dx===0||dismissing?"transform 0.32s cubic-bezier(.22,.68,0,1.2), opacity 0.28s ease":"none",
+        cursor:"grab",userSelect:"none",touchAction:"pan-y"}}>
+      <p style={{color:C.text,fontSize:"0.95rem",lineHeight:1.65,margin:"0 0 1rem"}}>{entry.body}</p>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"0.5rem"}}>
+        <span style={{color:C.muted,fontSize:"0.72rem"}}>by {entry.authorName} · {fmtDateShort(entry.createdAt)}</span>
+        <span style={{display:"flex",alignItems:"center",gap:"0.3rem",color:dx>40?C.greenText:C.muted,fontSize:"0.72rem",fontWeight:500,transition:"color 0.15s",whiteSpace:"nowrap"}}>
+          <span>→</span> Swipe to mark read
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function JournalStack({entries,onRead}){
+  if(!entries.length)return null;
+  const visible=entries.slice(0,3);
+  return(
+    <div style={{marginBottom:"2rem"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.75rem"}}>
+        <span style={{color:C.text,fontWeight:600,fontSize:"1rem"}}>💬 Messages</span>
+        <span style={{background:"#e8f0fe",color:C.blue,fontSize:"0.72rem",fontWeight:600,padding:"0.15rem 0.55rem",borderRadius:20}}>{entries.length} unread</span>
+      </div>
+      <div style={{position:"relative",height:185}}>
+        {visible.slice().reverse().map((entry,ri)=>{
+          const i=visible.length-1-ri;
+          const isTop=i===visible.length-1;
+          return(
+            <div key={entry.id} style={{position:"absolute",top:0,left:0,right:0,
+              transform:`scale(${1-i*0.035}) translateY(${i*-10}px)`,zIndex:i,
+              pointerEvents:isTop?"auto":"none"}}>
+              {isTop
+                ?<JournalCard entry={entry} onRead={onRead}/>
+                :<div style={{background:"#fff",borderRadius:20,border:"1px solid #e8e8ed",boxShadow:"0 2px 10px rgba(0,0,0,0.05)",padding:"1.5rem",height:180,opacity:0.65}}/>
+              }
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── GroupedRecords ────────────────────────────────────────────────────────────
+function GroupedRecords({pairs,showBadge=false}){
+  const[openY,setOpenY]=useState({});
+  const[openM,setOpenM]=useState({});
+  const[openW,setOpenW]=useState({});
+  if(!pairs.length)return <div style={{...cardStyle,padding:"3rem",textAlign:"center",color:C.muted,fontSize:"0.88rem"}}>No shifts recorded yet.</div>;
+
+  function wkStart(d){const m=new Date(d);m.setDate(d.getDate()-((d.getDay()+6)%7));m.setHours(0,0,0,0);return m;}
+  function wkKey(d){return wkStart(d).toISOString().slice(0,10);}
+  function wkLabel(d){const m=wkStart(d),e=new Date(m);e.setDate(m.getDate()+6);return`Week of ${m.toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${e.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`;}
+  function mKey(d){return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;}
+  function mLabel(d){return d.toLocaleDateString("en-US",{month:"long",year:"numeric"});}
+
+  const tree={};
+  pairs.forEach(p=>{
+    const d=new Date(p.inTime),y=d.getFullYear(),mk=mKey(d),wk=wkKey(d);
+    if(!tree[y])tree[y]={};
+    if(!tree[y][mk])tree[y][mk]={label:mLabel(d),weeks:{}};
+    if(!tree[y][mk].weeks[wk])tree[y][mk].weeks[wk]={label:wkLabel(d),pairs:[]};
+    tree[y][mk].weeks[wk].pairs.push(p);
+  });
+
+  const years=Object.keys(tree).sort((a,b)=>b-a);
+  const isYOpen=y=>openY[y]===undefined?parseInt(y)===new Date().getFullYear():openY[y];
+  const isMOpen=k=>openM[k]===undefined?true:openM[k];
+  const isWOpen=k=>openW[k]===undefined?true:openW[k];
+  const totalMs=ps=>{let ms=0;ps.forEach(p=>{if(p.outTime)ms+=new Date(p.outTime)-new Date(p.inTime);});if(!ms)return null;return`${Math.floor(ms/3600000)}h ${Math.floor((ms%3600000)/60000)}m`;};
+  const pill=n=><span style={{background:"#e8f0fe",border:"1px solid #c5d5f5",borderRadius:20,padding:"0.12rem 0.48rem",fontSize:"0.67rem",color:C.blue,marginLeft:"0.4rem"}}>{n} shift{n!==1?"s":""}</span>;
+  const chev=o=><span style={{display:"inline-block",transform:o?"rotate(90deg)":"none",transition:"transform 0.18s",marginRight:"0.4rem",color:C.muted,fontSize:"0.72rem"}}>▶</span>;
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:"0.6rem"}}>
+      {years.map(y=>{
+        const yo=isYOpen(y);
+        const yp=Object.values(tree[y]).flatMap(m=>Object.values(m.weeks).flatMap(w=>w.pairs));
+        return(
+          <div key={y} style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:16,overflow:"hidden",boxShadow:"0 1px 6px rgba(0,0,0,0.04)"}}>
+            <div onClick={()=>setOpenY(s=>({...s,[y]:!isYOpen(y)}))} style={{display:"flex",alignItems:"center",padding:"0.9rem 1.3rem",cursor:"pointer",background:"#f5f5f7",borderBottom:yo?"1px solid #e8e8ed":"none"}}>
+              {chev(yo)}<span style={{fontWeight:600,color:C.text}}>{y}</span>{pill(yp.length)}
+              {totalMs(yp)&&<span style={{marginLeft:"auto",color:C.sub,fontSize:"0.76rem"}}>{totalMs(yp)} total</span>}
+            </div>
+            {yo&&Object.keys(tree[y]).sort((a,b)=>b.localeCompare(a)).map(mk=>{
+              const mo=tree[y][mk],mop=isMOpen(mk);
+              const mp=Object.values(mo.weeks).flatMap(w=>w.pairs);
+              return(
+                <div key={mk} style={{borderBottom:"1px solid #f0f0f5"}}>
+                  <div onClick={()=>setOpenM(s=>({...s,[mk]:!isMOpen(mk)}))} style={{display:"flex",alignItems:"center",padding:"0.7rem 1.3rem 0.7rem 2rem",cursor:"pointer",background:"#fafafa"}}>
+                    {chev(mop)}<span style={{fontWeight:500,color:C.text,fontSize:"0.9rem"}}>{mo.label}</span>{pill(mp.length)}
+                    {totalMs(mp)&&<span style={{marginLeft:"auto",color:C.sub,fontSize:"0.74rem"}}>{totalMs(mp)}</span>}
+                  </div>
+                  {mop&&Object.keys(mo.weeks).sort((a,b)=>b.localeCompare(a)).map(wk=>{
+                    const we=mo.weeks[wk],wop=isWOpen(wk);
+                    return(
+                      <div key={wk}>
+                        <div onClick={()=>setOpenW(s=>({...s,[wk]:!isWOpen(wk)}))} style={{display:"flex",alignItems:"center",padding:"0.55rem 1.3rem 0.55rem 3rem",cursor:"pointer",borderTop:"1px solid #f5f5f7"}}>
+                          {chev(wop)}<span style={{color:C.sub,fontSize:"0.82rem"}}>{we.label}</span>{pill(we.pairs.length)}
+                          {totalMs(we.pairs)&&<span style={{marginLeft:"auto",color:C.muted,fontSize:"0.72rem"}}>{totalMs(we.pairs)}</span>}
+                        </div>
+                        {wop&&<ShiftTable pairs={we.pairs} showName={showBadge} showBadge={showBadge}/>}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── PinEditor (inline) ────────────────────────────────────────────────────────
+function NameEditor({name,onSave}){
+  const[editing,setEditing]=useState(false);
+  const[val,setVal]=useState(name);
+  if(!editing)return(
+    <div style={{display:"flex",alignItems:"center",gap:"0.4rem"}}>
+      <span>{name}</span>
+      <button onClick={()=>{setVal(name);setEditing(true);}} style={{background:"none",border:"none",color:C.blue,fontSize:"0.72rem",cursor:"pointer",padding:0}}>Edit</button>
+    </div>
+  );
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:"0.4rem"}}>
+      <input value={val} onChange={e=>setVal(e.target.value)}
+        style={{...inp({padding:"0.3rem 0.5rem",fontSize:"0.85rem",width:130}),marginTop:0}}/>
+      <button onClick={()=>{if(val.trim()){onSave(val.trim());setEditing(false);}}}
+        style={{...btnPrimary,padding:"0.28rem 0.6rem",fontSize:"0.72rem"}}>Save</button>
+      <button onClick={()=>setEditing(false)} style={{...btnGhost,padding:"0.28rem 0.5rem",fontSize:"0.72rem"}}>✕</button>
+    </div>
+  );
+}
+
+function PinEditor({userId,currentPin,onSave}){
+  const[editing,setEditing]=useState(false);
+  const[val,setVal]=useState(currentPin);
+  const[saved,setSaved]=useState(false);
+  if(!editing)return(
+    <div style={{display:"flex",alignItems:"center",gap:"0.5rem"}}>
+      <span style={{fontFamily:"monospace",fontSize:"0.85rem",color:currentPin?C.text:C.muted,letterSpacing:"0.12em"}}>{currentPin?"••••":"—"}</span>
+      <button onClick={()=>{setVal(currentPin);setEditing(true);}} style={{background:"none",border:"none",color:C.blue,fontSize:"0.72rem",cursor:"pointer",padding:0}}>Edit</button>
+    </div>
+  );
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:"0.4rem"}}>
+      <input maxLength={4} value={val} onChange={e=>setVal(e.target.value.replace(/\D/g,"").slice(0,4))}
+        style={{...inp({padding:"0.3rem 0.5rem",fontSize:"0.85rem",width:60,fontFamily:"monospace",letterSpacing:"0.1em"}),marginTop:0}} placeholder="0000"/>
+      <button onClick={()=>{onSave(val);setSaved(true);setEditing(false);setTimeout(()=>setSaved(false),2000);}}
+        style={{...btnPrimary,padding:"0.28rem 0.6rem",fontSize:"0.72rem"}}>Save</button>
+      <button onClick={()=>setEditing(false)} style={{...btnGhost,padding:"0.28rem 0.55rem",fontSize:"0.72rem"}}>✕</button>
+    </div>
+  );
+}
+
+// ── UserManagement ────────────────────────────────────────────────────────────
+function UserManagement({users,onAdd,onDelete,onUpdate}){
+  const blank={name:"",username:"",password:"",role:"staff",departments:[],pin:""};
+  const[form,setForm]=useState(blank);
+  const[err,setErr]=useState("");
+  const[ok,setOk]=useState("");
+  const[confirm,setConfirm]=useState(null);
+  const[editing,setEditing]=useState(null);
+
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const toggleDept=d=>set("departments",form.departments.includes(d)?form.departments.filter(x=>x!==d):[...form.departments,d]);
+
+  const handleAdd=()=>{
+    setErr("");setOk("");
+    if(!form.name.trim()||!form.username.trim()||!form.password.trim()){setErr("Name, username and password are required.");return;}
+    if(users.find(u=>u.username.toLowerCase()===form.username.toLowerCase())){setErr("Username already exists.");return;}
+    onAdd({id:mkId(),name:form.name.trim(),username:form.username.trim().toLowerCase(),password:form.password,role:form.role,departments:form.departments});
+    setForm(blank);setOk("User created.");setTimeout(()=>setOk(""),3000);
+  };
+
+  const iSt=inp({marginTop:0});
+  const lSt={...lbl,marginTop:0,marginBottom:"0.3rem"};
+
+  return(
+    <div>
+      <div style={secH}>Staff Accounts</div>
+      <div style={{...cardStyle,marginBottom:"2rem"}}>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead><tr><th style={TH}>Name</th><th style={TH}>Username</th><th style={TH}>Role</th><th style={TH}>PIN</th><th style={TH}>Departments</th><th style={TH}>Action</th></tr></thead>
+            <tbody>{users.map(u=>(
+              <tr key={u.id} style={{background:"#fff"}}>
+                <td style={{...TD,fontWeight:500}}>
+                  {u.role==="admin"?u.name:<NameEditor name={u.name} onSave={name=>onUpdate(u.id,{name})}/>}
+                </td>
+                <td style={{...TD,color:C.blue,fontFamily:"monospace",fontSize:"0.82rem"}}>{u.username}</td>
+                <td style={TD}><RoleBadge role={u.role}/></td>
+                <td style={TD}>
+                  {u.role==="admin"?<span style={{color:C.muted,fontSize:"0.75rem"}}>—</span>:(
+                    <PinEditor userId={u.id} currentPin={u.pin||""} onSave={(pin)=>onUpdate(u.id,{pin})}/>
+                  )}
+                </td>
+                <td style={TD}>
+                  {editing===u.id?(
+                    <div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:"0.3rem",marginBottom:"0.5rem"}}>
+                        {DEPARTMENTS.map(d=>{
+                          const active=(u.departments||[]).includes(d);
+                          return <button key={d} onClick={()=>onUpdate(u.id,{departments:active?(u.departments||[]).filter(x=>x!==d):[...(u.departments||[]),d]})}
+                            style={{fontSize:"0.65rem",fontWeight:600,padding:"0.2rem 0.55rem",borderRadius:20,cursor:"pointer",border:"1px solid",
+                              ...(active?{background:"#e8f0fe",color:"#1a56db",borderColor:"#c5d5f5"}:{background:"#f5f5f7",color:C.muted,borderColor:"#e8e8ed"})}}>
+                            {d}
+                          </button>;
+                        })}
+                      </div>
+                      <button style={{...btnGhost,fontSize:"0.72rem",padding:"0.2rem 0.6rem"}} onClick={()=>setEditing(null)}>Done</button>
+                    </div>
+                  ):(
+                    <div style={{display:"flex",flexWrap:"wrap",gap:"0.3rem",alignItems:"center"}}>
+                      {(u.departments||[]).length===0?<span style={{color:C.muted,fontSize:"0.78rem"}}>—</span>:(u.departments||[]).map(d=><DeptPill key={d} dept={d}/>)}
+                      {u.role!=="admin"&&<button onClick={()=>setEditing(u.id)} style={{background:"none",border:"none",color:C.blue,fontSize:"0.72rem",cursor:"pointer",padding:0,marginLeft:"0.25rem"}}>Edit</button>}
+                    </div>
+                  )}
+                </td>
+                <td style={TD}>
+                  {u.role==="admin"?<span style={{color:C.muted,fontSize:"0.75rem"}}>Protected</span>
+                    :confirm===u.id
+                      ?<span style={{display:"inline-flex",gap:"0.35rem",alignItems:"center"}}>
+                          <span style={{color:C.warn,fontSize:"0.78rem"}}>Delete?</span>
+                          <button style={{...btnDanger,padding:"0.2rem 0.55rem",fontSize:"0.72rem"}} onClick={()=>{onDelete(u.id);setConfirm(null);}}>Yes</button>
+                          <button style={{...btnGhost,padding:"0.2rem 0.55rem",fontSize:"0.72rem"}} onClick={()=>setConfirm(null)}>No</button>
+                        </span>
+                      :<button style={btnDanger} onClick={()=>setConfirm(u.id)}>Delete</button>
+                  }
+                </td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={secH}>Add New User</div>
+      <div style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:20,padding:"1.8rem",boxShadow:"0 1px 8px rgba(0,0,0,0.04)"}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(165px,1fr))",gap:"1rem",marginBottom:"1rem"}}>
+          {[{k:"name",pl:"Jane Smith",lb:"Full Name"},{k:"username",pl:"jsmith",lb:"Username"},{k:"password",pl:"••••••••",lb:"Password",t:"password"},{k:"pin",pl:"0000",lb:"Kiosk PIN",t:"text",max:4}].map(({k,pl,lb,t,max})=>(
+            <div key={k}><label style={lSt}>{lb}</label><input style={iSt} type={t||"text"} placeholder={pl} maxLength={max} value={form[k]} onChange={e=>set(k,k==="pin"?e.target.value.replace(/\D/g,"").slice(0,4):e.target.value)}/></div>
+          ))}
+          <div><label style={lSt}>Role</label>
+            <select style={inp()} value={form.role} onChange={e=>set("role",e.target.value)}>
+              <option value="staff">Staff</option><option value="admin">Admin</option>
+            </select>
+          </div>
+        </div>
+        <div style={{marginBottom:"1rem"}}>
+          <label style={lSt}>Departments</label>
+          <div style={{display:"flex",flexWrap:"wrap",gap:"0.4rem",marginTop:"0.45rem"}}>
+            {DEPARTMENTS.map(d=>(
+              <button key={d} onClick={()=>toggleDept(d)} style={{fontSize:"0.72rem",fontWeight:600,padding:"0.26rem 0.7rem",borderRadius:20,cursor:"pointer",border:"1px solid",
+                ...(form.departments.includes(d)?{background:"#e8f0fe",color:"#1a56db",borderColor:"#c5d5f5"}:{background:"#f5f5f7",color:C.muted,borderColor:"#e8e8ed"})}}>
+                {d}
+              </button>
+            ))}
+          </div>
+        </div>
+        {err&&<p style={{color:C.red,fontSize:"0.8rem",marginBottom:"0.5rem"}}>{err}</p>}
+        {ok&&<p style={{color:C.green,fontSize:"0.8rem",marginBottom:"0.5rem"}}>{ok}</p>}
+        <button style={btnPrimary} onClick={handleAdd}>Create User</button>
+      </div>
+    </div>
+  );
+}
+
+// ── JournalAdmin ──────────────────────────────────────────────────────────────
+function JournalAdmin({entries,onAdd,onDelete,currentUser}){
+  const[body,setBody]=useState("");
+  const[depts,setDepts]=useState([]);
+  const[err,setErr]=useState("");
+  const tog=d=>setDepts(p=>p.includes(d)?p.filter(x=>x!==d):[...p,d]);
+  const handlePost=()=>{
+    if(!body.trim()){setErr("Message is required.");return;}
+    if(!depts.length){setErr("Select at least one department.");return;}
+    onAdd({id:mkId(),body:body.trim(),departments:depts,authorName:currentUser.name,createdAt:new Date().toISOString()});
+    setBody("");setDepts([]);setErr("");
+  };
+  return(
+    <div>
+      <div style={secH}>Post a Message</div>
+      <div style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:20,padding:"1.8rem",marginBottom:"2rem",boxShadow:"0 1px 8px rgba(0,0,0,0.04)"}}>
+        <label style={{...lbl,marginTop:0}}>Message</label>
+        <textarea style={{...inp(),minHeight:88,resize:"vertical",lineHeight:1.6}} placeholder="Write your message here…" value={body} onChange={e=>setBody(e.target.value)}/>
+        <label style={lbl}>Send to departments</label>
+        <div style={{display:"flex",flexWrap:"wrap",gap:"0.4rem",marginTop:"0.45rem",marginBottom:"1rem"}}>
+          {DEPARTMENTS.map(d=>(
+            <button key={d} onClick={()=>tog(d)} style={{fontSize:"0.72rem",fontWeight:600,padding:"0.28rem 0.75rem",borderRadius:20,cursor:"pointer",border:"1px solid",
+              ...(depts.includes(d)?{background:"#e8f0fe",color:"#1a56db",borderColor:"#c5d5f5"}:{background:"#f5f5f7",color:C.muted,borderColor:"#e8e8ed"})}}>
+              {d}
+            </button>
+          ))}
+        </div>
+        {err&&<p style={{color:C.red,fontSize:"0.8rem",marginBottom:"0.75rem"}}>{err}</p>}
+        <button style={btnPrimary} onClick={handlePost}>Post Message</button>
+      </div>
+
+      <div style={secH}>Posted Messages</div>
+      {!entries.length&&<p style={{color:C.muted,fontSize:"0.88rem"}}>No messages posted yet.</p>}
+      {entries.slice().reverse().map(e=>(
+        <div key={e.id} style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:16,padding:"1.2rem 1.4rem",marginBottom:"0.7rem",boxShadow:"0 1px 6px rgba(0,0,0,0.04)"}}>
+          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:"0.75rem",marginBottom:"0.5rem"}}>
+            <div style={{display:"flex",flexWrap:"wrap",gap:"0.3rem"}}>{e.departments.map(d=><DeptPill key={d} dept={d}/>)}</div>
+            <span style={{color:C.muted,fontSize:"0.72rem",whiteSpace:"nowrap"}}>{fmtDateShort(e.createdAt)}</span>
+          </div>
+          <p style={{color:C.text,fontSize:"0.88rem",lineHeight:1.6,margin:"0.4rem 0 0.7rem"}}>{e.body}</p>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <span style={{color:C.muted,fontSize:"0.72rem"}}>by {e.authorName}</span>
+            <button style={{...btnDanger,fontSize:"0.72rem",padding:"0.2rem 0.6rem"}} onClick={()=>onDelete(e.id)}>Delete</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── StaffView ─────────────────────────────────────────────────────────────────
+function StaffView({user,records,onClock,innCoords,journalEntries,readEntries,onRead}){
+  const[locMsg,setLocMsg]=useState(null);
+  const[locColor,setLocColor]=useState(C.sub);
+  const[showPast,setShowPast]=useState(false);
+  const userRecs=[...records].filter(r=>r.userId===user.id).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+  const isClockedIn=userRecs.length>0&&userRecs[0].type==="in";
+  const allPairs=buildPairs(records,user.id);
+  const todayPairs=allPairs.filter(p=>new Date(p.inTime).toDateString()===new Date().toDateString());
+  const myDepts=user.departments||[];
+  const myEntries=journalEntries.filter(e=>e.departments.some(d=>myDepts.includes(d))&&!readEntries.includes(e.id));
+  const pastEntries=journalEntries.filter(e=>e.departments.some(d=>myDepts.includes(d))&&readEntries.includes(e.id));
+
+  const handleClock=async(type)=>{
+    setLocMsg("📡 Getting location…");setLocColor(C.sub);
+    const doRec=(coords,onSite)=>onClock(type,coords,onSite);
+    if(!navigator.geolocation){doRec(null,null);return;}
+    navigator.geolocation.getCurrentPosition(pos=>{
+      const loc={lat:pos.coords.latitude,lng:pos.coords.longitude};
+      const dist=haversineM(loc.lat,loc.lng,innCoords.lat,innCoords.lng);
+      const onSite=dist<=RADIUS_M;
+      setLocMsg(onSite?`📍 On-site (${Math.round(dist)}m)`:`⚠️ Off-site (${Math.round(dist)}m from hotel)`);
+      setLocColor(onSite?C.greenText:C.warn);
+      doRec(loc,onSite);
+    },()=>{setLocMsg(null);doRec(null,null);},{enableHighAccuracy:true,timeout:10000});
+  };
+
+  return(
+    <div style={{maxWidth:700,margin:"0 auto",padding:"2rem 1.5rem 5rem"}}>
+      {/* Clock card */}
+      <div style={{...cardStyle,padding:"2.5rem 2rem 2rem",marginBottom:"1.5rem",textAlign:"center",overflow:"visible"}}>
+        <div style={{marginBottom:"0.8rem"}}>
+          <div style={{fontFamily:"'DM Sans',sans-serif",fontSize:"1.55rem",fontWeight:400,color:C.text,letterSpacing:"0.02em",lineHeight:1.15}}>Ocean Island Inn</div>
+          <div style={{color:C.muted,fontSize:"0.7rem",letterSpacing:"0.1em",textTransform:"uppercase",marginTop:"0.2rem"}}>Victoria, BC</div>
+        </div>
+        <LiveClock/>
+        <div style={{color:C.sub,fontSize:"0.82rem",marginTop:"0.3rem",marginBottom:"1.4rem"}}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}</div>
+        <div style={{display:"inline-flex",alignItems:"center",gap:"0.45rem",padding:"0.35rem 0.9rem",borderRadius:20,fontSize:"0.78rem",fontWeight:500,marginBottom:"1.4rem",
+          ...(isClockedIn?{background:"rgba(40,205,65,0.1)",border:"1px solid rgba(40,205,65,0.28)",color:C.greenText}:{background:"#f5f5f7",border:"1px solid #e8e8ed",color:C.sub})}}>
+          <span style={{width:6,height:6,borderRadius:"50%",background:isClockedIn?C.green:"#a1a1a6"}}></span>
+          {isClockedIn?"Clocked In":"Not Clocked In"}
+        </div>
+        <div style={{display:"flex",gap:"0.75rem",justifyContent:"center",flexWrap:"wrap"}}>
+          {[{label:"Clock In",active:!isClockedIn,type:"in",bg:C.green},{label:"Clock Out",active:isClockedIn,type:"out",bg:C.red}].map(b=>(
+            <button key={b.type} disabled={!b.active} onClick={()=>handleClock(b.type)}
+              style={{background:b.bg,border:"none",borderRadius:980,color:"#fff",padding:"0.82rem 2.2rem",fontFamily:"'DM Sans',sans-serif",fontSize:"0.95rem",fontWeight:500,cursor:b.active?"pointer":"not-allowed",opacity:b.active?1:0.28}}>
+              {b.label}
+            </button>
+          ))}
+        </div>
+        {locMsg&&<p style={{fontSize:"0.75rem",color:locColor,marginTop:"0.8rem"}}>{locMsg}</p>}
+      </div>
+
+      {/* Messages */}
+      {myEntries.length>0&&<JournalStack entries={myEntries} onRead={onRead}/>}
+
+      {/* Past messages */}
+      {pastEntries.length>0&&(
+        <div style={{marginBottom:"1.5rem"}}>
+          <button onClick={()=>setShowPast(s=>!s)} style={{...btnGhost,display:"flex",alignItems:"center",gap:"0.4rem",marginBottom:"0.75rem",fontSize:"0.8rem"}}>
+            <span style={{display:"inline-block",transform:showPast?"rotate(90deg)":"none",transition:"transform 0.18s",fontSize:"0.7rem"}}>▶</span>
+            Past Messages ({pastEntries.length})
+          </button>
+          {showPast&&(
+            <div style={{display:"flex",flexDirection:"column",gap:"0.5rem"}}>
+              {pastEntries.slice().reverse().map(e=>(
+                <div key={e.id} style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:14,padding:"1rem 1.2rem",boxShadow:"0 1px 6px rgba(0,0,0,0.04)",opacity:0.75}}>
+                  <p style={{color:C.text,fontSize:"0.88rem",lineHeight:1.6,margin:"0 0 0.4rem"}}>{e.body}</p>
+                  <span style={{color:C.muted,fontSize:"0.7rem"}}>by {e.authorName} · {fmtDateShort(e.createdAt)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Today's shifts */}
+      {todayPairs.length>0&&(
+        <div style={{marginBottom:"1.5rem"}}>
+          <div style={secH}>Today's Shifts</div>
+          <div style={cardStyle}><ShiftTable pairs={todayPairs}/></div>
+        </div>
+      )}
+
+      {/* Full history — only if records exist */}
+      {allPairs.length>0&&(
+        <div>
+          <div style={secH}>Shift History</div>
+          <GroupedRecords pairs={allPairs}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── AdminView ─────────────────────────────────────────────────────────────────
+function AdminView({users,records,innCoords,onSaveCoords,onAddUser,onDeleteUser,onUpdateUser,journalEntries,onAddEntry,onDeleteEntry,currentUser}){
+  const[tab,setTab]=useState("live");
+  const[fu,setFu]=useState("all");
+  const[cf,setCf]=useState({lat:innCoords.lat,lng:innCoords.lng});
+  const[saveMsg,setSaveMsg]=useState("");
+
+  const allPairs=buildPairs(records);
+  const activePairs=allPairs.filter(p=>!p.outTime);
+  const staffUsers=users.filter(u=>u.role==="staff");
+  const todayPairs=allPairs.filter(p=>new Date(p.inTime).toDateString()===new Date().toDateString());
+
+  const doSave=async()=>{await onSaveCoords({lat:parseFloat(cf.lat),lng:parseFloat(cf.lng)});setSaveMsg("✓ Saved");setTimeout(()=>setSaveMsg(""),2500);};
+
+  const TABS=[["live","🟢 Live"],["records","📊 Records"],["journal","💬 Messages"],["users","👥 Users"],["settings","⚙️ Settings"]];
+  const selSt={background:"#fff",border:"1px solid #d2d2d7",borderRadius:10,color:C.text,padding:"0.52rem 1rem",fontFamily:"'DM Sans',sans-serif",fontSize:"0.84rem",outline:"none"};
+
+  return(
+    <div style={{maxWidth:1100,margin:"0 auto",padding:"2rem 1.5rem 5rem"}}>
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:"0.8rem",marginBottom:"1.8rem"}}>
+        {[{lbl:"Currently In",val:activePairs.length,sub:activePairs.slice(0,2).map(p=>p.name.split(" ")[0]).join(", ")||"None"},
+          {lbl:"Shifts Today",val:todayPairs.length,sub:"clock-ins"},
+          {lbl:"Total Staff",val:staffUsers.length,sub:"accounts"},
+          {lbl:"Remote Logins",val:allPairs.filter(p=>p.onSite===false).length,sub:"flagged",warn:allPairs.filter(p=>p.onSite===false).length>0}
+        ].map((s,i)=>(
+          <div key={i} style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:16,padding:"1.1rem 1.3rem",boxShadow:"0 1px 6px rgba(0,0,0,0.04)"}}>
+            <div style={{color:C.muted,fontSize:"0.66rem",letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:"0.2rem"}}>{s.lbl}</div>
+            <div style={{color:s.warn?C.warn:C.text,fontSize:"2rem",fontWeight:300,lineHeight:1}}>{s.val}</div>
+            <div style={{color:C.sub,fontSize:"0.7rem",marginTop:"0.2rem"}}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",gap:"0.4rem",marginBottom:"1.8rem",flexWrap:"wrap"}}>
+        {TABS.map(([t,l])=>(
+          <button key={t} onClick={()=>setTab(t)} style={{borderRadius:980,padding:"0.48rem 1.1rem",fontFamily:"'DM Sans',sans-serif",fontSize:"0.84rem",cursor:"pointer",
+            background:tab===t?C.blue:"#fff",color:tab===t?"#fff":C.text,border:tab===t?"none":"1px solid #e8e8ed"}}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {/* LIVE */}
+      {tab==="live"&&(
+        <div>
+          <div style={secH}>Live Staff Status</div>
+          <div style={cardStyle}>
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <thead><tr>{["Staff","Departments","Status","Clocked In","Active For","Location"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead>
+              <tbody>{staffUsers.map(u=>{
+                const ap=activePairs.find(p=>p.userId===u.id);
+                return(
+                  <tr key={u.id} style={{background:"#fff"}}>
+                    <td style={{...TD,fontWeight:500}}>{u.name}</td>
+                    <td style={TD}><div style={{display:"flex",flexWrap:"wrap",gap:"0.25rem"}}>{(u.departments||[]).map(d=><DeptPill key={d} dept={d}/>)}</div></td>
+                    <td style={TD}>{ap
+                      ?<span style={{display:"inline-flex",alignItems:"center",gap:5,padding:"0.18rem 0.6rem",borderRadius:20,fontSize:"0.72rem",fontWeight:600,background:"rgba(40,205,65,0.1)",border:"1px solid rgba(40,205,65,0.28)",color:C.greenText}}>
+                          <span style={{width:5,height:5,borderRadius:"50%",background:C.green}}></span>In</span>
+                      :<span style={{color:C.muted,fontSize:"0.82rem"}}>Off</span>}
+                    </td>
+                    <td style={TD}>{ap?fmtTime(ap.inTime):"—"}</td>
+                    <td style={{...TD,color:C.sub,fontSize:"0.8rem"}}>{ap?dur(ap.inTime,new Date().toISOString()):"—"}</td>
+                    <td style={TD}>{ap?<SiteBadge onSite={ap.onSite}/>:"—"}</td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* RECORDS */}
+      {tab==="records"&&(
+        <div>
+          <div style={{display:"flex",gap:"0.6rem",alignItems:"center",flexWrap:"wrap",marginBottom:"1.4rem"}}>
+            <select style={selSt} value={fu} onChange={e=>setFu(e.target.value)}>
+              <option value="all">All Staff</option>
+              {staffUsers.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+            <button style={btnGhost} onClick={()=>exportCSV(records)}>⬇ Export CSV</button>
+          </div>
+          <GroupedRecords pairs={allPairs.filter(p=>fu==="all"||p.userId===fu)} showBadge={true}/>
+        </div>
+      )}
+
+      {/* JOURNAL */}
+      {tab==="journal"&&<JournalAdmin entries={journalEntries} onAdd={onAddEntry} onDelete={onDeleteEntry} currentUser={currentUser}/>}
+
+      {/* USERS */}
+      {tab==="users"&&<UserManagement users={users} onAdd={onAddUser} onDelete={onDeleteUser} onUpdate={onUpdateUser}/>}
+
+      {/* SETTINGS */}
+      {tab==="settings"&&(
+        <div>
+          <div style={secH}>Settings</div>
+          <div style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:20,padding:"2rem",boxShadow:"0 1px 8px rgba(0,0,0,0.04)"}}>
+            <p style={{color:C.text,fontWeight:600,fontSize:"0.9rem",marginBottom:"0.5rem"}}>📍 Hotel Location</p>
+            <p style={{color:C.sub,fontSize:"0.83rem",marginBottom:"1.2rem"}}>Staff within <strong style={{color:C.blue}}>{RADIUS_M}m</strong> are marked On-Site.</p>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1rem",marginBottom:"0.8rem"}}>
+              {["lat","lng"].map(k=>(
+                <div key={k}><label style={lbl}>{k==="lat"?"Latitude":"Longitude"}</label>
+                  <input style={inp()} type="number" step="0.0001" value={cf[k]} onChange={e=>setCf(p=>({...p,[k]:e.target.value}))}/>
+                </div>
+              ))}
+            </div>
+            <p style={{color:C.muted,fontSize:"0.74rem",marginBottom:"1.5rem"}}>💡 Right-click in Google Maps to copy coordinates.</p>
+            <div style={{borderTop:"1px solid #e8e8ed",paddingTop:"1.5rem",marginBottom:"1.5rem"}}>
+              <p style={{color:C.text,fontWeight:600,fontSize:"0.9rem",marginBottom:"0.5rem"}}>📊 Google Sheets Webhook</p>
+              <label style={lbl}>Webhook URL (optional)</label>
+              <input style={inp()} type="url" placeholder="https://script.google.com/macros/s/…/exec"/>
+              <p style={{color:C.muted,fontSize:"0.72rem",marginTop:"0.4rem"}}>Clock events POST here in real-time.</p>
+            </div>
+            <button style={btnPrimary} onClick={doSave}>Save Settings</button>
+            {saveMsg&&<p style={{color:C.green,fontSize:"0.8rem",marginTop:"0.6rem"}}>{saveMsg}</p>}
+            <div style={{borderTop:"1px solid #e8e8ed",paddingTop:"1.5rem",marginTop:"1.5rem"}}>
+              <p style={{color:C.text,fontWeight:600,fontSize:"0.9rem",marginBottom:"0.5rem"}}>📤 Export</p>
+              <button style={btnGhost} onClick={()=>exportCSV(records)}>⬇ Download CSV</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── KioskView ─────────────────────────────────────────────────────────────────
+function KioskView({users,records,onKioskClock,onExit}){
+  const[selected,setSelected]=useState(null);
+  const[pin,setPin]=useState("");
+  const[error,setError]=useState("");
+  const[confirmed,setConfirmed]=useState(null);
+  const[activeLetter,setActiveLetter]=useState("ALL");
+  const gridRef=useRef(null);
+
+  const staffUsers=users.filter(u=>u.role==="staff").sort((a,b)=>a.name.localeCompare(b.name));
+
+  // Build alphabet index from actual names
+  const letters=["ALL",...[...new Set(staffUsers.map(u=>u.name[0].toUpperCase()))].sort()];
+
+  const filtered=activeLetter==="ALL"?staffUsers:staffUsers.filter(u=>u.name[0].toUpperCase()===activeLetter);
+
+  const isClockedIn=(userId)=>{
+    const recs=[...records].filter(r=>r.userId===userId).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+    return recs.length>0&&recs[0].type==="in";
+  };
+
+  const handleDigit=(d)=>{
+    if(pin.length>=4)return;
+    const next=pin+d;
+    setPin(next);setError("");
+    if(next.length===4){
+      setTimeout(()=>{
+        const correctPin=(selected.pin||"0000");
+        if(next===correctPin){
+          const type=isClockedIn(selected.id)?"out":"in";
+          onKioskClock(selected.id,selected.name,type);
+          setConfirmed({type,name:selected.name});
+          setTimeout(()=>{setSelected(null);setPin("");setConfirmed(null);},2500);
+        } else {
+          setError("Incorrect PIN. Try again.");
+          setPin("");
+        }
+      },150);
+    }
+  };
+
+  const handleDel=()=>{setPin(p=>p.slice(0,-1));setError("");};
+  const handleBack=()=>{setSelected(null);setPin("");setError("");};
+  const KEYS=["1","2","3","4","5","6","7","8","9","","0","⌫"];
+
+  // ── Confirmed screen
+  if(confirmed){
+    const isIn=confirmed.type==="in";
+    return(
+      <div style={{minHeight:"100vh",background:isIn?"#f0fdf4":"#fff5f5",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"1rem",fontFamily:"'DM Sans',sans-serif"}}>
+        <div style={{fontSize:"5rem"}}>{isIn?"✅":"👋"}</div>
+        <div style={{fontSize:"2rem",fontWeight:600,color:isIn?C.greenText:C.red}}>{confirmed.name}</div>
+        <div style={{fontSize:"1.2rem",color:isIn?C.greenText:C.red,fontWeight:500}}>{isIn?"Clocked In":"Clocked Out"} · {new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</div>
+      </div>
+    );
+  }
+
+  // ── PIN pad screen
+  if(selected){
+    const clocked=isClockedIn(selected.id);
+    return(
+      <div style={{minHeight:"100vh",background:"#f5f5f7",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"2rem",fontFamily:"'DM Sans',sans-serif"}}>
+        <div style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:28,padding:"2.5rem 2rem",width:"100%",maxWidth:340,boxShadow:"0 4px 32px rgba(0,0,0,0.08)",textAlign:"center"}}>
+          <div style={{marginBottom:"1.8rem"}}>
+            <div style={{width:60,height:60,borderRadius:"50%",background:C.blue,color:"#fff",fontSize:"1.5rem",fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 0.75rem"}}>
+              {selected.name[0]}
+            </div>
+            <div style={{fontSize:"1.25rem",fontWeight:600,color:C.text}}>{selected.name}</div>
+            <div style={{display:"inline-flex",alignItems:"center",gap:"0.4rem",marginTop:"0.4rem",padding:"0.25rem 0.8rem",borderRadius:20,fontSize:"0.78rem",fontWeight:500,
+              ...(clocked?{background:"rgba(40,205,65,0.1)",border:"1px solid rgba(40,205,65,0.28)",color:C.greenText}:{background:"#f5f5f7",border:"1px solid #e8e8ed",color:C.sub})}}>
+              <span style={{width:6,height:6,borderRadius:"50%",background:clocked?C.green:"#a1a1a6"}}></span>
+              {clocked?"Currently Clocked In":"Not Clocked In"}
+            </div>
+          </div>
+          <div style={{fontSize:"0.82rem",color:C.sub,marginBottom:"1.2rem",fontWeight:500}}>
+            Enter PIN to clock <strong style={{color:clocked?C.red:C.greenText}}>{clocked?"out":"in"}</strong>
+          </div>
+          <div style={{display:"flex",gap:"0.9rem",justifyContent:"center",marginBottom:"0.6rem"}}>
+            {[0,1,2,3].map(i=>(
+              <div key={i} style={{width:14,height:14,borderRadius:"50%",background:i<pin.length?C.text:"#e8e8ed",transition:"background 0.12s"}}/>
+            ))}
+          </div>
+          <div style={{minHeight:"1.6rem",marginBottom:"0.3rem"}}>
+            {error&&<p style={{color:C.red,fontSize:"0.8rem",margin:0}}>{error}</p>}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"0.55rem",marginBottom:"1.3rem"}}>
+            {KEYS.map((k,i)=>(
+              k===""?<div key={i}/>:
+              <button key={i} onClick={()=>k==="⌫"?handleDel():handleDigit(k)}
+                style={{background:k==="⌫"?"#f5f5f7":"#fff",border:"1px solid #e8e8ed",borderRadius:14,
+                  padding:"1rem 0",fontSize:k==="⌫"?"1.2rem":"1.35rem",fontWeight:k==="⌫"?400:500,
+                  color:C.text,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",
+                  boxShadow:"0 1px 4px rgba(0,0,0,0.05)",lineHeight:1}}>
+                {k}
+              </button>
+            ))}
+          </div>
+          <button onClick={handleBack} style={{background:"none",border:"none",color:C.muted,fontSize:"0.85rem",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
+            ← Back to staff list
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Staff grid with alphabetical sidebar
+  const now=new Date();
+  const timeStr=now.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
+  const dateStr=now.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"});
+  const clockedInCount=staffUsers.filter(u=>isClockedIn(u.id)).length;
+
+  return(
+    <div style={{minHeight:"100vh",background:"#f0f0f5",display:"flex",flexDirection:"column",fontFamily:"'DM Sans',sans-serif"}}>
+      {/* Header bar */}
+      <div style={{background:C.blue,padding:"0.85rem 1.5rem",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div>
+          <div style={{color:"#fff",fontSize:"1.1rem",fontWeight:600}}>Ocean Island Inn · Staff Kiosk</div>
+          <div style={{color:"rgba(255,255,255,0.75)",fontSize:"0.76rem"}}>{dateStr} · {timeStr}</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"1rem"}}>
+          <div style={{color:"rgba(255,255,255,0.85)",fontSize:"0.8rem"}}>
+            <span style={{fontWeight:600,color:"#fff"}}>{clockedInCount}</span> of {staffUsers.length} in
+          </div>
+          <button onClick={onExit} style={{background:"rgba(255,255,255,0.18)",border:"1px solid rgba(255,255,255,0.3)",borderRadius:980,color:"#fff",padding:"0.38rem 0.9rem",fontSize:"0.8rem",fontWeight:500,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
+            Exit
+          </button>
+        </div>
+      </div>
+
+      {/* Sub-header hint */}
+      <div style={{background:"#fff",borderBottom:"1px solid #e8e8ed",padding:"0.65rem 1.5rem",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <span style={{color:C.sub,fontSize:"0.84rem"}}>Select your name, then enter your PIN</span>
+        <span style={{color:C.muted,fontSize:"0.78rem"}}>{filtered.length} staff shown</span>
+      </div>
+
+      {/* Main: grid + sidebar */}
+      <div style={{display:"flex",flex:1,overflow:"hidden"}}>
+        {/* Staff grid */}
+        <div ref={gridRef} style={{flex:1,overflowY:"auto",padding:"1rem 0.75rem 1rem 1rem"}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:"0.65rem"}}>
+            {filtered.map(u=>{
+              const clocked=isClockedIn(u.id);
+              return(
+                <button key={u.id} onClick={()=>{setSelected(u);setPin("");setError("");}}
+                  style={{background:"#fff",border:`2px solid ${clocked?"rgba(40,205,65,0.4)":"#e8e8ed"}`,borderRadius:16,
+                    padding:"1.1rem 0.6rem 0.9rem",cursor:"pointer",fontFamily:"'DM Sans',sans-serif",
+                    boxShadow:clocked?"0 2px 12px rgba(40,205,65,0.14)":"0 1px 4px rgba(0,0,0,0.05)",
+                    textAlign:"center",transition:"transform 0.1s"}}>
+                  {/* Avatar */}
+                  <div style={{width:42,height:42,borderRadius:"50%",
+                    background:clocked?"rgba(40,205,65,0.15)":"#f0f0f5",
+                    color:clocked?C.greenText:"#888",
+                    fontSize:"1.1rem",fontWeight:700,
+                    display:"flex",alignItems:"center",justifyContent:"center",
+                    margin:"0 auto 0.55rem",border:clocked?"2px solid rgba(40,205,65,0.3)":"2px solid transparent"}}>
+                    {u.name[0]}
+                  </div>
+                  <div style={{fontSize:"0.88rem",fontWeight:600,color:C.text,lineHeight:1.25,marginBottom:"0.3rem",wordBreak:"break-word"}}>{u.name}</div>
+                  <div style={{fontSize:"0.64rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",color:clocked?C.greenText:C.muted}}>
+                    {clocked?"● Clocked In":"○ Clocked Out"}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Alphabetical sidebar */}
+        <div style={{width:68,background:"#fff",borderLeft:"1px solid #e8e8ed",display:"flex",flexDirection:"column",alignItems:"center",padding:"0.5rem 0",gap:"0.2rem",overflowY:"auto"}}>
+          {letters.map(l=>(
+            <button key={l} onClick={()=>setActiveLetter(l)}
+              style={{width:46,padding:"0.45rem 0",borderRadius:10,border:"none",cursor:"pointer",
+                fontFamily:"'DM Sans',sans-serif",fontSize:l==="ALL"?"0.65rem":"0.88rem",fontWeight:600,
+                background:activeLetter===l?C.blue:"transparent",
+                color:activeLetter===l?"#fff":C.sub,
+                transition:"background 0.15s"}}>
+              {l}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function Footer(){
+  const[shown,setShown]=useState(false);
+  return(
+    <div style={{position:"fixed",bottom:0,left:0,right:0,background:"rgba(255,255,255,0.92)",backdropFilter:"blur(14px)",borderTop:"1px solid #e8e8ed",padding:"0.65rem 1.5rem",display:"flex",alignItems:"center",justifyContent:"center",zIndex:20}}>
+      <button onClick={()=>setShown(s=>!s)} style={{background:"none",border:"none",color:C.blue,fontSize:"0.83rem",fontWeight:500,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",display:"flex",alignItems:"center",gap:"0.4rem"}}>
+        📲 Add shortcut to your phone
+      </button>
+      {shown&&(
+        <div style={{position:"absolute",bottom:"calc(100% + 8px)",left:"50%",transform:"translateX(-50%)",background:"#fff",border:"1px solid #e8e8ed",borderRadius:18,padding:"1.3rem 1.5rem",width:290,boxShadow:"0 8px 36px rgba(0,0,0,0.12)"}}>
+          <p style={{fontWeight:600,color:C.text,fontSize:"0.92rem",marginBottom:"0.7rem"}}>Add to Home Screen</p>
+          <p style={{color:C.sub,fontSize:"0.82rem",lineHeight:1.6,marginBottom:"0.5rem"}}><strong>iPhone:</strong> Tap the Share icon in Safari → <em>"Add to Home Screen"</em></p>
+          <p style={{color:C.sub,fontSize:"0.82rem",lineHeight:1.6,marginBottom:"0.9rem"}}><strong>Android:</strong> Tap ⋮ in Chrome → <em>"Add to Home Screen"</em></p>
+          <button onClick={()=>setShown(false)} style={{...btnGhost,width:"100%",textAlign:"center"}}>Got it</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Root App ──────────────────────────────────────────────────────────────────
+function App(){
+  const[user,setUser]=useState(null);
+  const[users,setUsers]=useState([]);
+  const[records,setRecords]=useState([]);
+  const[innCoords,setInnCoords]=useState(DEFAULT_INN);
+  const[journalEntries,setJournalEntries]=useState([]);
+  const[readEntries,setReadEntries]=useState([]);
+  const[showKiosk,setShowKiosk]=useState(false);
+  const[lid,setLid]=useState("");
+  const[lpw,setLpw]=useState("");
+  const[lerr,setLerr]=useState("");
+  const[loaded,setLoaded]=useState(false);
+
+  useEffect(()=>{
+    (async()=>{
+      let[us,recs,coords,journal]=await Promise.all([DB.getUsers(),DB.getRecords(),DB.getCoords(),DB.getJournal()]);
+      // Seed users if none in DB yet
+      if(!us||us.filter(u=>u.role!=="system").length===0){
+        us=SEED_USERS;
+        await Promise.all(SEED_USERS.map(u=>DB.upsertUser(u)));
+      }
+      us=(us||[]).filter(u=>u.role!=="system");
+      // Purge old demo accounts
+      us=us.filter(u=>!OLD_DEMO_IDS.includes(u.id));
+      // Merge in any seed users not yet in storage (preserves saved PINs/depts)
+      const storedIds=new Set(us.map(u=>u.id));
+      SEED_USERS.forEach(s=>{if(!storedIds.has(s.id))us.push(s);});
+      // Migration: ensure all staff have a pin field
+      let needsSave=false;
+      us=us.map(u=>{
+        if(u.role==="staff"&&u.pin===undefined){needsSave=true;return{...u,pin:"0000"};}
+        return u;
+      });
+      await Promise.all(us.map(u=>DB.upsertUser(u)));
+      setUsers(us);setRecords(recs||[]);setInnCoords(coords||DEFAULT_INN);setJournalEntries(journal||[]);
+      setLoaded(true);
+    })();
+  },[]);
+
+  const handleLogin=()=>{
+    setLerr("");
+    const u=users.find(x=>x.username===lid.toLowerCase().trim());
+    if(!u||u.password!==lpw){setLerr("Incorrect username or password.");return;}
+    setReadEntries([]);
+    setUser({...u});
+  };
+
+  const handleClock=useCallback(async(type,coords,onSite)=>{
+    const rec={id:mkId(),userId:user.id,userName:user.name,type,timestamp:new Date().toISOString(),lat:coords?.lat??null,lng:coords?.lng??null,onSite};
+    const updated=[...records,rec];setRecords(updated);await DB.insertRecord(rec);
+  },[user,records]);
+
+  const handleKioskClock=useCallback(async(userId,userName,type)=>{
+    const rec={id:mkId(),userId,userName,type,timestamp:new Date().toISOString(),lat:null,lng:null,onSite:true};
+    const updated=[...records,rec];setRecords(updated);await DB.insertRecord(rec);
+  },[records]);
+
+  const handleSaveCoords=useCallback(async(coords)=>{setInnCoords(coords);await DB.setCoords(coords);},[]);
+  const handleAddUser=useCallback(async(u)=>{const up=[...users,u];setUsers(up);await DB.upsertUser(u);},[users]);
+  const handleDeleteUser=useCallback(async(id)=>{const up=users.filter(u=>u.id!==id);setUsers(up);await DB.deleteUser(id);},[users]);
+  const handleUpdateUser=useCallback(async(id,changes)=>{
+    const up=users.map(u=>u.id===id?{...u,...changes}:u);
+    setUsers(up);await DB.upsertUser({...users.find(u=>u.id===id),...changes,id});
+    if(user?.id===id)setUser(u=>({...u,...changes}));
+  },[users,user]);
+  const handleAddEntry=useCallback(async(e)=>{const up=[...journalEntries,e];setJournalEntries(up);await DB.insertJournal(e);},[journalEntries]);
+  const handleDeleteEntry=useCallback(async(id)=>{const up=journalEntries.filter(e=>e.id!==id);setJournalEntries(up);await DB.deleteJournal(id);},[journalEntries]);
+  const handleRead=useCallback((id)=>setReadEntries(p=>[...p,id]),[]);
+
+  const FONTS=`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap');`;
+
+  if(!loaded)return(
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif",color:C.sub}}>
+      <style>{FONTS}</style>Loading…
+    </div>
+  );
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif"}}>
+      <style>{FONTS}</style>
+      {showKiosk?(
+        <KioskView users={users} records={records} onKioskClock={handleKioskClock} onExit={()=>setShowKiosk(false)}/>
+      ):!user?(
+        <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"2rem"}}>
+          <div style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:24,padding:"2.8rem 2.4rem",width:"100%",maxWidth:385,boxShadow:"0 4px 32px rgba(0,0,0,0.08)"}}>
+            <div style={{textAlign:"center",marginBottom:"2rem"}}>
+              <div style={{marginBottom:"0.6rem"}}>
+                <div style={{fontFamily:"'DM Sans',sans-serif",fontSize:"1.75rem",fontWeight:400,color:C.text,letterSpacing:"0.02em",lineHeight:1.2}}>Ocean Island Inn</div>
+              </div>
+              <p style={{color:C.muted,fontSize:"0.74rem",letterSpacing:"0.08em",textTransform:"uppercase",margin:0}}>Staff Time Clock</p>
+            </div>
+            <label style={{...lbl,marginTop:0}}>Username</label>
+            <input style={inp()} type="text" placeholder="Enter username" value={lid} onChange={e=>setLid(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()}/>
+            <label style={lbl}>Password</label>
+            <input style={inp()} type="password" placeholder="Enter password" value={lpw} onChange={e=>setLpw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()}/>
+            {lerr&&<p style={{color:C.red,fontSize:"0.8rem",textAlign:"center",marginTop:"0.65rem"}}>{lerr}</p>}
+            <button style={{...btnPrimary,width:"100%",padding:"0.82rem",marginTop:"1.4rem",fontSize:"0.95rem"}} onClick={handleLogin}>Sign In</button>
+            <div style={{marginTop:"1.3rem",borderTop:"1px solid #e8e8ed",paddingTop:"1rem"}}>
+              <p style={{color:C.muted,fontSize:"0.7rem",textAlign:"center",marginBottom:"0.5rem",letterSpacing:"0.04em"}}>DEMO ACCOUNTS</p>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.3rem"}}>
+                {[["admin","admin123","👑 Manager"],["nazeem","pass123","Nazeem"],["asha","pass123","Asha"],["charlie","pass123","Charlie"]].map(([id,pw,label])=>(
+                  <div key={id} style={{background:"#f5f5f7",border:"1px solid #e8e8ed",borderRadius:8,padding:"0.38rem 0.5rem",color:C.text,fontSize:"0.71rem",textAlign:"center",cursor:"pointer"}} onClick={()=>{setLid(id);setLpw(pw);}}>
+                    {label}
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Kiosk link */}
+            <div style={{marginTop:"1.2rem",textAlign:"center"}}>
+              <button onClick={()=>setShowKiosk(true)} style={{background:"none",border:"none",color:C.blue,fontSize:"0.82rem",fontWeight:500,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",display:"inline-flex",alignItems:"center",gap:"0.35rem"}}>
+                🖥 Use Staff Kiosk instead
+              </button>
+            </div>
+          </div>
+          <Footer/>
+        </div>
+      ):(
+        <>
+          <header style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.65rem 1.5rem",borderBottom:"1px solid #e8e8ed",background:"rgba(255,255,255,0.9)",backdropFilter:"blur(18px)",position:"sticky",top:0,zIndex:10}}>
+            <div style={{fontFamily:"'DM Sans',sans-serif",fontSize:"1.05rem",fontWeight:400,color:C.text,letterSpacing:"0.02em"}}>Ocean Island Inn</div>
+            <div style={{display:"flex",alignItems:"center",gap:"0.75rem"}}>
+              <span style={{color:C.text,fontSize:"0.84rem",fontWeight:500}}>
+                {user.name}
+                {user.role==="admin"&&<span style={{background:C.blue,color:"#fff",fontSize:"0.6rem",fontWeight:600,letterSpacing:"0.04em",textTransform:"uppercase",padding:"0.16rem 0.48rem",borderRadius:20,marginLeft:"0.4rem"}}>Admin</span>}
+              </span>
+              <button style={btnGhost} onClick={()=>setUser(null)}>Sign Out</button>
+            </div>
+          </header>
+          {user.role==="admin"
+            ?<AdminView users={users} records={records} innCoords={innCoords} onSaveCoords={handleSaveCoords} onAddUser={handleAddUser} onDeleteUser={handleDeleteUser} onUpdateUser={handleUpdateUser} journalEntries={journalEntries} onAddEntry={handleAddEntry} onDeleteEntry={handleDeleteEntry} currentUser={user}/>
+            :<StaffView user={user} records={records} onClock={handleClock} innCoords={innCoords} journalEntries={journalEntries} readEntries={readEntries} onRead={handleRead}/>
+          }
+          <Footer/>
+        </>
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(App));
+  </script>
+</body>
+</html>
