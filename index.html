@@ -1270,6 +1270,7 @@ function App(){
         return u;
       });
       await Promise.all(us.map(u=>DB.upsertUser(u)));
+      console.log("[Load] records from DB:", (recs||[]).length, "first:", JSON.stringify((recs||[])[0]||null));
       setUsers(us);setRecords(recs||[]);setInnCoords(coords||DEFAULT_INN);setJournalEntries(journal||[]);
       setLoaded(true);
     })();
