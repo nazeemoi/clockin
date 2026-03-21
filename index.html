@@ -1291,8 +1291,10 @@ function App(){
     if(selfieBlob){
       selfieUrl=await DB.uploadSelfie(recId, selfieBlob);
     }
+    console.log("[Clock] selfieUrl before insert:", selfieUrl);
     const rec={id:recId,userId:user.id,userName:user.name,type,timestamp:new Date().toISOString(),lat:coords?.lat??null,lng:coords?.lng??null,onSite,ip:dev.ip,deviceId:dev.deviceId,deviceType:dev.deviceType,selfieUrl};
     const updated=[...records,rec];setRecords(updated);await DB.insertRecord(rec);
+    console.log("[Clock] insert done, selfieUrl was:", rec.selfieUrl);
     // Auto-delete selfies older than 90 days (run quietly in background)
     if(type==="in") DB.deleteOldSelfies(90).catch(()=>{});
   },[user,records]);
