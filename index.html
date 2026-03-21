@@ -158,10 +158,10 @@ function buildPairs(records,filterUserId){
   Object.values(byUser).forEach(recs=>{
     let open=null;
     recs.forEach(r=>{
-      if(r.type==="in"){if(open)pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:null,onSite:open.onSite});open=r;}
-      else if(r.type==="out"&&open){pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:r.timestamp,onSite:open.onSite});open=null;}
+      if(r.type==="in"){if(open)pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:null,onSite:open.onSite,selfieUrl:open.selfieUrl??null});open=r;}
+      else if(r.type==="out"&&open){pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:r.timestamp,onSite:open.onSite,selfieUrl:open.selfieUrl??null});open=null;}
     });
-    if(open)pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:null,onSite:open.onSite});
+    if(open)pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:null,onSite:open.onSite,selfieUrl:open.selfieUrl??null});
   });
   return pairs.sort((a,b)=>new Date(b.inTime)-new Date(a.inTime));
 }
@@ -359,7 +359,7 @@ function JournalStack({entries,onRead}){
 }
 
 // ── GroupedRecords ────────────────────────────────────────────────────────────
-function GroupedRecords({pairs,showBadge=false}){
+function GroupedRecords({pairs,showBadge=false,showSelfie=false}){
   const[openY,setOpenY]=useState({});
   const[openM,setOpenM]=useState({});
   const[openW,setOpenW]=useState({});
@@ -416,7 +416,7 @@ function GroupedRecords({pairs,showBadge=false}){
                           {chev(wop)}<span style={{color:C.sub,fontSize:"0.82rem"}}>{we.label}</span>{pill(we.pairs.length)}
                           {totalMs(we.pairs)&&<span style={{marginLeft:"auto",color:C.muted,fontSize:"0.72rem"}}>{totalMs(we.pairs)}</span>}
                         </div>
-                        {wop&&<ShiftTable pairs={we.pairs} showName={showBadge} showBadge={showBadge} showSelfie={showBadge}/>}
+                        {wop&&<ShiftTable pairs={we.pairs} showName={showBadge} showBadge={showBadge} showSelfie={showSelfie}/>}
                       </div>
                     );
                   })}
@@ -957,7 +957,7 @@ function AdminView({users,records,innCoords,onSaveCoords,onAddUser,onDeleteUser,
             </select>
             <button style={btnGhost} onClick={()=>exportCSV(records)}>⬇ Export CSV</button>
           </div>
-          <GroupedRecords pairs={allPairs.filter(p=>fu==="all"||p.userId===fu)} showBadge={true}/>
+          <GroupedRecords pairs={allPairs.filter(p=>fu==="all"||p.userId===fu)} showBadge={true} showSelfie={true}/>
         </div>
       )}
 
