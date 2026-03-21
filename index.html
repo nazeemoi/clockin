@@ -126,9 +126,15 @@ const DB = {
   // ── Selfie storage ──────────────────────────────────────────────────────
   async uploadSelfie(recordId, blob){
     const path = `selfies/${recordId}.jpg`;
-    const{error}=await sb.storage.from("clockin-selfies").upload(path, blob, {contentType:"image/jpeg",upsert:true});
-    if(error){console.error("uploadSelfie",error);return null;}
+    console.log("[Selfie] Uploading to path:", path, "blob size:", blob?.size);
+    const{data:upData,error}=await sb.storage.from("clockin-selfies").upload(path, blob, {contentType:"image/jpeg",upsert:true});
+    if(error){
+      console.error("[Selfie] Upload error:", error.message, error);
+      return null;
+    }
+    console.log("[Selfie] Upload success:", upData);
     const{data}=sb.storage.from("clockin-selfies").getPublicUrl(path);
+    console.log("[Selfie] Public URL:", data.publicUrl);
     return data.publicUrl;
   },
   async deleteOldSelfies(days){
