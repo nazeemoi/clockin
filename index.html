@@ -255,13 +255,15 @@ const FaceEngine = {
     for(let i=0;i<a.length;i++){ dot+=a[i]*b[i]; na+=a[i]*a[i]; nb+=b[i]*b[i]; }
     return dot/(Math.sqrt(na)*Math.sqrt(nb));
   },
-  match(embedding, enrolledRows, threshold=0.82){
+  match(embedding, enrolledRows, threshold=0.96){
     let best=null, bestScore=-1;
     for(const row of enrolledRows){
       const stored = new Float32Array(row.face_descriptor);
       const score = this.cosineSim(embedding, stored);
+      console.log(`[FaceEngine] ${row.name}: score=${score.toFixed(4)}`);
       if(score > bestScore){ bestScore=score; best=row; }
     }
+    console.log(`[FaceEngine] Best: ${best?.name} score=${bestScore.toFixed(4)} threshold=${threshold} → ${bestScore>=threshold?'MATCH':'NO MATCH'}`);
     return bestScore >= threshold ? {user:best, score:bestScore} : null;
   },
 };
