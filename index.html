@@ -912,42 +912,40 @@ function AdminView({users,records,innCoords,onSaveCoords,onAddUser,onDeleteUser,
               })}</tbody>
             </table>
           </div>
-        </div>
-
-        {/* Device Alerts */}
-        {(()=>{
-          const byUser={};
-          allPairs.forEach(p=>{
-            if(!p.deviceId) return;
-            if(!byUser[p.userId]) byUser[p.userId]={name:p.name,devices:new Map()};
-            if(!byUser[p.userId].devices.has(p.deviceId))
-              byUser[p.userId].devices.set(p.deviceId,{type:p.deviceType,ip:p.ip,lastSeen:p.inTime});
-          });
-          const flagged=Object.values(byUser).filter(u=>u.devices.size>1);
-          if(!flagged.length) return null;
-          return(
-            <div style={{marginTop:"1.5rem"}}>
-              <div style={{...secH,color:C.warn}}>&#9888; Device Alerts</div>
-              <div style={{display:"flex",flexDirection:"column",gap:"0.6rem"}}>
-                {flagged.map((u,i)=>(
-                  <div key={i} style={{background:"#fff",border:"1px solid rgba(255,159,10,0.35)",borderRadius:14,padding:"1rem 1.3rem"}}>
-                    <div style={{fontWeight:600,color:C.text,fontSize:"0.9rem",marginBottom:"0.5rem"}}>{u.name} logged in from {u.devices.size} different devices</div>
-                    <div style={{display:"flex",flexDirection:"column",gap:"0.3rem"}}>
-                      {[...u.devices.entries()].map(([id,d],j)=>(
-                        <div key={j} style={{display:"flex",alignItems:"center",gap:"0.75rem",fontSize:"0.78rem",color:C.sub,flexWrap:"wrap"}}>
-                          <span style={{fontFamily:"monospace",background:"#f5f5f7",padding:"0.1rem 0.4rem",borderRadius:4,fontSize:"0.7rem"}}>{id}</span>
-                          <span>{d.type==="iPhone"?"iPhone":d.type==="Android"?"Android":d.type==="iPad"?"iPad":"Desktop"}</span>
-                          {d.ip&&<span style={{fontFamily:"monospace",color:C.muted,fontSize:"0.7rem"}}>{d.ip}</span>}
-                          <span style={{color:C.muted,fontSize:"0.7rem",marginLeft:"auto"}}>last {fmtDateShort(d.lastSeen)}</span>
-                        </div>
-                      ))}
+          {(()=>{
+            const byUser={};
+            allPairs.forEach(p=>{
+              if(!p.deviceId) return;
+              if(!byUser[p.userId]) byUser[p.userId]={name:p.name,devices:new Map()};
+              if(!byUser[p.userId].devices.has(p.deviceId))
+                byUser[p.userId].devices.set(p.deviceId,{type:p.deviceType,ip:p.ip,lastSeen:p.inTime});
+            });
+            const flagged=Object.values(byUser).filter(u=>u.devices.size>1);
+            if(!flagged.length) return null;
+            return(
+              <div style={{marginTop:"1.5rem"}}>
+                <div style={{...secH,color:C.warn}}>Device Alerts</div>
+                <div style={{display:"flex",flexDirection:"column",gap:"0.6rem"}}>
+                  {flagged.map((u,i)=>(
+                    <div key={i} style={{background:"#fff",border:"1px solid rgba(255,159,10,0.35)",borderRadius:14,padding:"1rem 1.3rem"}}>
+                      <div style={{fontWeight:600,color:C.text,fontSize:"0.9rem",marginBottom:"0.5rem"}}>{u.name} logged in from {u.devices.size} different devices</div>
+                      <div style={{display:"flex",flexDirection:"column",gap:"0.3rem"}}>
+                        {[...u.devices.entries()].map(([id,d],j)=>(
+                          <div key={j} style={{display:"flex",alignItems:"center",gap:"0.75rem",fontSize:"0.78rem",color:C.sub,flexWrap:"wrap"}}>
+                            <span style={{fontFamily:"monospace",background:"#f5f5f7",padding:"0.1rem 0.4rem",borderRadius:4,fontSize:"0.7rem"}}>{id}</span>
+                            <span>{d.type==="iPhone"?"iPhone":d.type==="Android"?"Android":d.type==="iPad"?"iPad":"Desktop"}</span>
+                            {d.ip&&<span style={{fontFamily:"monospace",color:C.muted,fontSize:"0.7rem"}}>{d.ip}</span>}
+                            <span style={{color:C.muted,fontSize:"0.7rem",marginLeft:"auto"}}>last {fmtDateShort(d.lastSeen)}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-          );
-        })()}
+            );
+          })()}
+        </div>
       )}
 
       {tab==="records"&&(
