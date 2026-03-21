@@ -278,7 +278,7 @@ function FaceEnrollModal({user, onClose, onEnrolled}){
   const detectedRef = useRef(false);
 
   const stopCamera = () => {
-    if(rafRef.current) cancelAnimationFrame(rafRef.current);
+    if(rafRef.current){ clearTimeout(rafRef.current); cancelAnimationFrame(rafRef.current); }
     if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
     streamRef.current = null;
     detectedRef.current = false;
@@ -286,42 +286,57 @@ function FaceEnrollModal({user, onClose, onEnrolled}){
   useEffect(() => () => stopCamera(), []);
 
   const startEnroll = async () => {
-    setPhase("loading"); setMsg("Loading models…");
+    setPhase("loading"); setMsg("Loading models...");
     embeddingRef.current = null;
+    detectedRef.current = false;
     try {
       await FaceEngine.load();
-      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:640,height:480}});
+      setMsg("Starting camera...");
+      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:480}}});
       streamRef.current = stream;
-      if(videoRef.current) videoRef.current.srcObject = stream;
-      setPhase("scanning"); setMsg("Position your face in the frame.");
-
+      const vid = videoRef.current;
+      if(!vid){ stopCamera(); return; }
+      vid.srcObject = stream;
+      await vid.play().catch(()=>{});
+      // Wait until video is actually delivering frames (important on iOS Safari)
+      await new Promise(resolve => {
+        const check = () => {
+          if(vid.readyState >= 2 && vid.videoWidth > 0) resolve();
+          else requestAnimationFrame(check);
+        };
+        check();
+      });
+      setPhase("scanning"); setMsg("Looking for your face...");
+      // Poll every 300ms to avoid flooding the GPU
       const scan = async () => {
         if(!videoRef.current || detectedRef.current) return;
-        const emb = await FaceEngine.embed(videoRef.current);
-        if(emb){
-          detectedRef.current = true;
-          embeddingRef.current = emb;
-          let c = 3;
-          setMsg(`Face detected! Capturing in ${c}…`); setCountdown(c);
-          const tick = setInterval(()=>{
-            c--;
-            if(c > 0){ setCountdown(c); setMsg(`Capturing in ${c}…`); }
-            else {
-              clearInterval(tick); setCountdown(null);
-              stopCamera(); setPhase("captured");
-              setMsg("Face captured. Save this enrollment?");
-            }
-          }, 1000);
-          return;
-        }
-        rafRef.current = requestAnimationFrame(scan);
+        try {
+          const emb = await FaceEngine.embed(videoRef.current);
+          if(emb){
+            detectedRef.current = true;
+            embeddingRef.current = emb;
+            let c = 3;
+            setMsg("Face detected! Capturing in " + c + "..."); setCountdown(c);
+            const tick = setInterval(()=>{
+              c--;
+              if(c > 0){ setCountdown(c); setMsg("Capturing in " + c + "..."); }
+              else {
+                clearInterval(tick); setCountdown(null);
+                stopCamera(); setPhase("captured");
+                setMsg("Face captured. Save this enrollment?");
+              }
+            }, 1000);
+            return;
+          } else {
+            setMsg("Looking for your face... ensure good lighting.");
+          }
+        } catch(scanErr){ console.warn("scan frame error:", scanErr); }
+        rafRef.current = setTimeout(scan, 300);
       };
-      const onLoaded = () => { rafRef.current = requestAnimationFrame(scan); };
-      if(videoRef.current.readyState >= 2) onLoaded();
-      else videoRef.current.addEventListener("loadeddata", onLoaded, {once:true});
+      scan();
     } catch(err){
-      console.error(err); stopCamera(); setPhase("error");
-      setMsg(err.name==="NotAllowedError" ? "Camera permission denied." : "Something went wrong. Try again.");
+      console.error("enroll error:", err); stopCamera(); setPhase("error");
+      setMsg(err.name==="NotAllowedError" ? "Camera permission denied." : "Error: " + (err.message || "Something went wrong."));
     }
   };
 
@@ -374,7 +389,7 @@ function FaceLoginButton({users, onSuccess, onFallback}){
   const rafRef = useRef(null);
 
   const stopCamera = () => {
-    if(rafRef.current) cancelAnimationFrame(rafRef.current);
+    if(rafRef.current){ clearTimeout(rafRef.current); cancelAnimationFrame(rafRef.current); }
     if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
     streamRef.current = null;
   };
@@ -389,29 +404,47 @@ function FaceLoginButton({users, onSuccess, onFallback}){
 
       const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user"}});
       streamRef.current = stream;
-      if(videoRef.current) videoRef.current.srcObject = stream;
-      setPhase("scanning"); setMsg("Hold still — scanning…");
+      const vid = videoRef.current;
+      if(!vid){ stopCamera(); return; }
+      vid.srcObject = stream;
+      await vid.play().catch(()=>{});
+      await new Promise(resolve => {
+        const check = () => {
+          if(vid.readyState >= 2 && vid.videoWidth > 0) resolve();
+          else requestAnimationFrame(check);
+        };
+        check();
+      });
 
+      await vid.play().catch(()=>{});
+      await new Promise(resolve => {
+        const check = () => {
+          if(vid.readyState >= 2 && vid.videoWidth > 0) resolve();
+          else requestAnimationFrame(check);
+        };
+        check();
+      });
+      setPhase("scanning"); setMsg("Hold still - scanning...");
       const scan = async () => {
         if(!videoRef.current) return;
-        const emb = await FaceEngine.embed(videoRef.current);
-        if(emb){
-          const result = FaceEngine.match(emb, rows);
-          if(result){
-            stopCamera();
-            const u = users.find(x=>x.id===result.user.id);
-            if(u){
-              setPhase("matched"); setMsg(`✅ Welcome, ${u.name}!`);
-              setTimeout(()=>{ setPhase("idle"); setMsg(""); onSuccess(u); }, 1200);
-              return;
+        try {
+          const emb = await FaceEngine.embed(videoRef.current);
+          if(emb){
+            const result = FaceEngine.match(emb, rows);
+            if(result){
+              stopCamera();
+              const u = users.find(x=>x.id===result.user.id);
+              if(u){
+                setPhase("matched"); setMsg("Welcome, " + u.name + "!");
+                setTimeout(()=>{ setPhase("idle"); setMsg(""); onSuccess(u); }, 1200);
+                return;
+              }
             }
           }
-        }
-        rafRef.current = requestAnimationFrame(scan);
+        } catch(e){ console.warn("login scan error:", e); }
+        rafRef.current = setTimeout(scan, 300);
       };
-      const onLoaded = () => { rafRef.current = requestAnimationFrame(scan); };
-      if(videoRef.current.readyState >= 2) onLoaded();
-      else videoRef.current.addEventListener("loadeddata", onLoaded, {once:true});
+      scan();
     } catch(err){
       console.error(err); stopCamera();
       setPhase("failed"); setMsg("Face scan unavailable. Falling back to kiosk…");
@@ -456,7 +489,7 @@ function FaceKioskScan({users, records, onClock, onFallback}){
     return recs.length>0&&recs[0].type==="in";
   };
   const stopCamera = () => {
-    if(rafRef.current) cancelAnimationFrame(rafRef.current);
+    if(rafRef.current){ clearTimeout(rafRef.current); cancelAnimationFrame(rafRef.current); }
     if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
     streamRef.current = null;
   };
@@ -471,32 +504,42 @@ function FaceKioskScan({users, records, onClock, onFallback}){
 
       const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user"}});
       streamRef.current = stream;
-      if(videoRef.current) videoRef.current.srcObject = stream;
-      setPhase("scanning"); setMsg("Look at the camera…");
+      const stream_vid = videoRef.current;
+      if(!stream_vid){ stopCamera(); return; }
+      stream_vid.srcObject = stream;
 
+      await stream_vid.play().catch(()=>{});
+      await new Promise(resolve => {
+        const check = () => {
+          if(stream_vid.readyState >= 2 && stream_vid.videoWidth > 0) resolve();
+          else requestAnimationFrame(check);
+        };
+        check();
+      });
+      setPhase("scanning"); setMsg("Look at the camera...");
       const scan = async () => {
         if(!videoRef.current) return;
-        const emb = await FaceEngine.embed(videoRef.current);
-        if(emb){
-          const result = FaceEngine.match(emb, rows);
-          if(result){
-            stopCamera();
-            const u = users.find(x=>x.id===result.user.id);
-            if(u){
-              const type = isClockedIn(u.id) ? "out" : "in";
-              onClock(u.id, u.name, type);
-              setConfirmed({name:u.name, type});
-              setPhase("confirmed");
-              setTimeout(()=>{ setPhase("idle"); setConfirmed(null); }, 2500);
-              return;
+        try {
+          const emb = await FaceEngine.embed(videoRef.current);
+          if(emb){
+            const result = FaceEngine.match(emb, rows);
+            if(result){
+              stopCamera();
+              const u = users.find(x=>x.id===result.user.id);
+              if(u){
+                const type = isClockedIn(u.id) ? "out" : "in";
+                onClock(u.id, u.name, type);
+                setConfirmed({name:u.name, type});
+                setPhase("confirmed");
+                setTimeout(()=>{ setPhase("idle"); setConfirmed(null); }, 2500);
+                return;
+              }
             }
           }
-        }
-        rafRef.current = requestAnimationFrame(scan);
+        } catch(e){ console.warn("kiosk scan error:", e); }
+        rafRef.current = setTimeout(scan, 300);
       };
-      const onLoaded = () => { rafRef.current = requestAnimationFrame(scan); };
-      if(videoRef.current.readyState >= 2) onLoaded();
-      else videoRef.current.addEventListener("loadeddata", onLoaded, {once:true});
+      scan();
     } catch(err){
       console.error(err); stopCamera(); setPhase("idle");
     }
