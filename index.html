@@ -21,9 +21,6 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface@0.0.7/dist/blazeface.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.js"></script>
   <script type="text/babel">
 const { useState, useEffect, useCallback, useRef } = React;
 
@@ -90,13 +87,15 @@ const DB = {
   async getRecords(){
     const{data,error}=await sb.from("clock_records").select("*").order("timestamp",{ascending:true});
     if(error){console.error("getRecords",error);return null;}
-    return(data||[]).map(r=>({id:r.id,userId:r.user_id,userName:r.user_name,type:r.type,timestamp:r.timestamp,lat:r.lat,lng:r.lng,onSite:r.on_site}));
+    return(data||[]).map(r=>({id:r.id,userId:r.user_id,userName:r.user_name,type:r.type,timestamp:r.timestamp,lat:r.lat,lng:r.lng,onSite:r.on_site,ip:r.ip,deviceId:r.device_id,deviceType:r.device_type,selfieUrl:r.selfie_url}));
   },
   async insertRecord(rec){
     const{error}=await sb.from("clock_records").insert({
       id:rec.id, user_id:rec.userId, user_name:rec.userName,
       type:rec.type, timestamp:rec.timestamp,
-      lat:rec.lat??null, lng:rec.lng??null, on_site:rec.onSite??null
+      lat:rec.lat??null, lng:rec.lng??null, on_site:rec.onSite??null,
+      ip:rec.ip??null, device_id:rec.deviceId??null, device_type:rec.deviceType??null,
+      selfie_url:rec.selfieUrl??null,
     });
     if(error)console.error("insertRecord",error);
   },
@@ -124,19 +123,21 @@ const DB = {
   async setCoords(coords){
     await sb.from("users").upsert({id:"__coords__",username:"__coords__",name:"__coords__",role:"system",pin:JSON.stringify(coords)},{onConflict:"id"});
   },
-  // ── Face descriptors ──────────────────────────────────────────────────────
-  async saveFaceDescriptor(userId, descriptor){
-    const{error}=await sb.from("users").update({face_descriptor: Array.from(descriptor)}).eq("id",userId);
-    if(error)console.error("saveFaceDescriptor",error);
+  // ── Selfie storage ──────────────────────────────────────────────────────
+  async uploadSelfie(recordId, blob){
+    const path = `selfies/${recordId}.jpg`;
+    const{error}=await sb.storage.from("clockin-selfies").upload(path, blob, {contentType:"image/jpeg",upsert:true});
+    if(error){console.error("uploadSelfie",error);return null;}
+    const{data}=sb.storage.from("clockin-selfies").getPublicUrl(path);
+    return data.publicUrl;
   },
-  async clearFaceDescriptor(userId){
-    const{error}=await sb.from("users").update({face_descriptor: null}).eq("id",userId);
-    if(error)console.error("clearFaceDescriptor",error);
-  },
-  async getFaceDescriptors(){
-    const{data,error}=await sb.from("users").select("id,name,face_descriptor").not("face_descriptor","is",null);
-    if(error){console.error("getFaceDescriptors",error);return[];}
-    return data||[];
+  async deleteOldSelfies(days){
+    const cutoff=new Date(Date.now()-days*86400000).toISOString();
+    const{data:oldRecs}=await sb.from("clock_records").select("id").lt("timestamp",cutoff).eq("type","in");
+    if(!oldRecs||!oldRecs.length) return;
+    const paths=oldRecs.map(r=>`selfies/${r.id}.jpg`);
+    await sb.storage.from("clockin-selfies").remove(paths);
+    console.log(`Deleted ${paths.length} old selfies`);
   },
 };
 
@@ -167,9 +168,42 @@ function buildPairs(records,filterUserId){
 
 function exportCSV(records){
   const pairs=buildPairs(records);
-  const hdr="Staff,Date,Clock In,Clock Out,Duration,Status\n";
-  const rows=pairs.map(p=>[p.name,fmtDate(p.inTime),fmtTime(p.inTime),p.outTime?fmtTime(p.outTime):"Still In",p.outTime?dur(p.inTime,p.outTime):"",p.onSite===null?"No GPS":p.onSite?"On-Site":"Remote"].join(",")).join("\n");
+  const hdr="Staff,Date,Clock In,Clock Out,Duration,Status,Device,IP\n";
+  const rows=pairs.map(p=>[p.name,fmtDate(p.inTime),fmtTime(p.inTime),p.outTime?fmtTime(p.outTime):"Still In",p.outTime?dur(p.inTime,p.outTime):"",p.onSite===null?"No GPS":p.onSite?"On-Site":"Remote",p.deviceType||"",p.ip||""].join(",")).join("\n");
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([hdr+rows],{type:"text/csv"}));a.download=`OceanIslandInn_${new Date().toISOString().slice(0,10)}.csv`;a.click();
+}
+
+
+// ── Device fingerprint ────────────────────────────────────────────────────────
+async function getDeviceInfo(){
+  // Stable device fingerprint from browser characteristics
+  const fp = [
+    navigator.userAgent,
+    navigator.language,
+    screen.width + 'x' + screen.height,
+    screen.colorDepth,
+    new Date().getTimezoneOffset(),
+    navigator.hardwareConcurrency||'',
+    navigator.deviceMemory||'',
+  ].join('|');
+  // Hash it to a short ID
+  let hash = 0;
+  for(let i=0;i<fp.length;i++){ hash = ((hash<<5)-hash)+fp.charCodeAt(i); hash|=0; }
+  const deviceId = Math.abs(hash).toString(36);
+  // Detect mobile
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  const deviceType = /iPhone/i.test(navigator.userAgent)?'iPhone'
+    :/iPad/i.test(navigator.userAgent)?'iPad'
+    :/Android/i.test(navigator.userAgent)?'Android'
+    :'Desktop';
+  // Get public IP via free API
+  let ip = null;
+  try{
+    const r = await fetch('https://api.ipify.org?format=json',{signal:AbortSignal.timeout(3000)});
+    const d = await r.json();
+    ip = d.ip;
+  }catch(e){}
+  return {deviceId, deviceType, isMobile, ip, ua: navigator.userAgent.slice(0,120)};
 }
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
@@ -206,385 +240,32 @@ function LiveClock(){
   return <div style={{fontSize:"3rem",fontWeight:300,color:C.text,letterSpacing:"-0.03em",lineHeight:1}}>{now.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</div>;
 }
 
-// ── TF.js face engine (BlazeFace + MobileNet, loads once) ────────────────────
-const FaceEngine = {
-  blazeModel: null,
-  mobileModel: null,
-  loading: false,
-  loaded: false,
-  async load(){
-    if(this.loaded) return;
-    if(this.loading) { await new Promise(r=>{ const t=setInterval(()=>{ if(this.loaded){clearInterval(t);r();} },100); }); return; }
-    this.loading = true;
-    await tf.setBackend("webgl");
-    await tf.ready();
-    [this.blazeModel, this.mobileModel] = await Promise.all([
-      blazeface.load(),
-      mobilenet.load({version:2, alpha:0.5}),
-    ]);
-    this.loaded = true;
-    this.loading = false;
-  },
-  // Returns Float32Array embedding from a video/canvas, or null if no face found
-  async embed(videoEl){
-    const preds = await this.blazeModel.estimateFaces(videoEl, false);
-    if(!preds.length) return null;
-    const p = preds[0];
-    const [x1,y1] = p.topLeft;
-    const [x2,y2] = p.bottomRight;
-    const pad = 20;
-    const sx = Math.max(0, x1-pad), sy = Math.max(0, y1-pad);
-    const sw = Math.min(videoEl.videoWidth||videoEl.width, x2+pad) - sx;
-    const sh = Math.min(videoEl.videoHeight||videoEl.height, y2+pad) - sy;
-    // Crop face to offscreen canvas
-    const crop = document.createElement("canvas");
-    crop.width = 224; crop.height = 224;
-    crop.getContext("2d").drawImage(videoEl, sx, sy, sw, sh, 0, 0, 224, 224);
-    // Get MobileNet embedding (logit layer before softmax = 1024-d vector)
-    // mobileModel.infer(img, true) returns a tensor directly (not {result})
-    const embedding = tf.tidy(()=>{
-      const img = tf.browser.fromPixels(crop).toFloat().div(127.5).sub(1).expandDims(0);
-      return this.mobileModel.infer(img, true).squeeze();
-    });
-    const vec = await embedding.data();
-    embedding.dispose();
-    return new Float32Array(vec);
-  },
-  cosineSim(a, b){
-    let dot=0, na=0, nb=0;
-    for(let i=0;i<a.length;i++){ dot+=a[i]*b[i]; na+=a[i]*a[i]; nb+=b[i]*b[i]; }
-    return dot/(Math.sqrt(na)*Math.sqrt(nb));
-  },
-  match(embedding, enrolledRows, threshold=0.96){
-    let best=null, bestScore=-1;
-    for(const row of enrolledRows){
-      const stored = new Float32Array(row.face_descriptor);
-      const score = this.cosineSim(embedding, stored);
-      console.log(`[FaceEngine] ${row.name}: score=${score.toFixed(4)}`);
-      if(score > bestScore){ bestScore=score; best=row; }
-    }
-    console.log(`[FaceEngine] Best: ${best?.name} score=${bestScore.toFixed(4)} threshold=${threshold} → ${bestScore>=threshold?'MATCH':'NO MATCH'}`);
-    return bestScore >= threshold ? {user:best, score:bestScore} : null;
-  },
-};
 
-// ── FaceEnrollModal ───────────────────────────────────────────────────────────
-function FaceEnrollModal({user, onClose, onEnrolled}){
-  const [phase, setPhase] = useState("idle");
-  const [msg, setMsg] = useState("");
-  const [countdown, setCountdown] = useState(null);
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
-  const rafRef = useRef(null);
-  const embeddingRef = useRef(null);
-  const detectedRef = useRef(false);
 
-  const stopCamera = () => {
-    if(rafRef.current){ clearTimeout(rafRef.current); cancelAnimationFrame(rafRef.current); }
-    if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
-    streamRef.current = null;
-    detectedRef.current = false;
-  };
-  useEffect(() => () => stopCamera(), []);
 
-  const startEnroll = async () => {
-    setPhase("loading"); setMsg("Loading models...");
-    embeddingRef.current = null;
-    detectedRef.current = false;
-    try {
-      await FaceEngine.load();
-      setMsg("Starting camera...");
-      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:480}}});
-      streamRef.current = stream;
-      const vid = videoRef.current;
-      if(!vid){ stopCamera(); return; }
-      vid.srcObject = stream;
-      await vid.play().catch(()=>{});
-      // Wait until video is actually delivering frames (important on iOS Safari)
-      await new Promise(resolve => {
-        const check = () => {
-          if(vid.readyState >= 2 && vid.videoWidth > 0) resolve();
-          else requestAnimationFrame(check);
-        };
-        check();
-      });
-      setPhase("scanning"); setMsg("Looking for your face...");
-      // Poll every 300ms to avoid flooding the GPU
-      const scan = async () => {
-        if(!videoRef.current || detectedRef.current) return;
-        try {
-          const emb = await FaceEngine.embed(videoRef.current);
-          if(emb){
-            detectedRef.current = true;
-            embeddingRef.current = emb;
-            let c = 3;
-            setMsg("Face detected! Capturing in " + c + "..."); setCountdown(c);
-            const tick = setInterval(()=>{
-              c--;
-              if(c > 0){ setCountdown(c); setMsg("Capturing in " + c + "..."); }
-              else {
-                clearInterval(tick); setCountdown(null);
-                stopCamera(); setPhase("captured");
-                setMsg("Face captured. Save this enrollment?");
-              }
-            }, 1000);
-            return;
-          } else {
-            setMsg("Looking for your face... ensure good lighting.");
-          }
-        } catch(scanErr){ console.warn("scan frame error:", scanErr); }
-        rafRef.current = setTimeout(scan, 300);
-      };
-      scan();
-    } catch(err){
-      console.error("enroll error:", err); stopCamera(); setPhase("error");
-      setMsg(err.name==="NotAllowedError" ? "Camera permission denied." : "Error: " + (err.message || "Something went wrong."));
-    }
-  };
 
-  const saveEnrollment = async () => {
-    if(!embeddingRef.current) return;
-    setPhase("saving"); setMsg("Saving…");
-    await DB.saveFaceDescriptor(user.id, Array.from(embeddingRef.current));
-    setPhase("done"); setMsg(`✅ ${user.name}'s face enrolled.`);
-    onEnrolled(user.id);
-    setTimeout(()=>onClose(), 1600);
-  };
-
-  const retake = () => { embeddingRef.current=null; detectedRef.current=false; setPhase("idle"); setMsg(""); };
-
-  return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",backdropFilter:"blur(6px)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:"1.5rem"}}>
-      <div style={{background:"#fff",borderRadius:24,padding:"2rem",width:"100%",maxWidth:420,boxShadow:"0 20px 60px rgba(0,0,0,0.2)"}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1.5rem"}}>
-          <div><div style={{fontWeight:600,color:C.text,fontSize:"1rem"}}>Enroll Face</div><div style={{color:C.sub,fontSize:"0.78rem",marginTop:"0.15rem"}}>{user.name}</div></div>
-          <button onClick={()=>{stopCamera();onClose();}} style={{background:"#f5f5f7",border:"1px solid #e8e8ed",borderRadius:"50%",width:32,height:32,cursor:"pointer",fontSize:"1rem",color:C.sub,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
-        </div>
-        <div style={{position:"relative",width:"100%",paddingBottom:"75%",borderRadius:16,overflow:"hidden",background:"#111",marginBottom:"1.2rem",border:`2px solid ${phase==="scanning"?C.green:phase==="captured"?C.blue:"#e8e8ed"}`}}>
-          <video ref={videoRef} autoPlay muted playsInline style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)"}}/>
-          {(phase==="scanning"||phase==="loading")&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none"}}><div style={{width:"55%",paddingBottom:"70%",position:"relative"}}><div style={{position:"absolute",inset:0,borderRadius:"50%",border:"2px dashed rgba(255,255,255,0.5)"}}/></div></div>}
-          {countdown!==null&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.3)"}}><div style={{fontSize:"5rem",fontWeight:300,color:"#fff",lineHeight:1}}>{countdown}</div></div>}
-          {phase==="idle"&&<div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"0.5rem"}}><div style={{fontSize:"3rem"}}>👤</div><div style={{color:"rgba(255,255,255,0.6)",fontSize:"0.8rem"}}>Camera preview</div></div>}
-          {phase==="loading"&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:"0.85rem"}}>Loading models…</div>}
-          {phase==="captured"&&<div style={{position:"absolute",inset:0,background:"rgba(0,113,227,0.15)",display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{width:56,height:56,borderRadius:"50%",background:C.blue,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1.6rem"}}>✓</div></div>}
-          {phase==="done"&&<div style={{position:"absolute",inset:0,background:"rgba(40,205,65,0.15)",display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{fontSize:"3rem"}}>✅</div></div>}
-        </div>
-        {msg&&<p style={{fontSize:"0.82rem",color:phase==="error"?C.red:phase==="done"?C.greenText:C.sub,textAlign:"center",marginBottom:"1.2rem"}}>{msg}</p>}
-        <div style={{display:"flex",gap:"0.6rem",justifyContent:"center",flexWrap:"wrap"}}>
-          {phase==="idle"&&<button style={btnPrimary} onClick={startEnroll}>Start Camera</button>}
-          {phase==="error"&&<button style={btnPrimary} onClick={retake}>Try Again</button>}
-          {phase==="captured"&&<><button style={btnGhost} onClick={retake}>Retake</button><button style={btnPrimary} onClick={saveEnrollment}>Save Enrollment</button></>}
-          {phase==="saving"&&<button style={{...btnPrimary,opacity:0.6,cursor:"not-allowed"}} disabled>Saving…</button>}
-        </div>
-        {phase==="scanning"&&<p style={{fontSize:"0.72rem",color:C.muted,textAlign:"center",marginTop:"1rem"}}>Good lighting helps. Look directly at the camera.</p>}
-      </div>
-    </div>
-  );
-}
-
-// ── FaceLoginButton (login screen) ────────────────────────────────────────────
-function FaceLoginButton({users, onSuccess, onFallback}){
-  const [phase, setPhase] = useState("idle");
-  const [msg, setMsg] = useState("");
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
-  const rafRef = useRef(null);
-
-  const stopCamera = () => {
-    if(rafRef.current){ clearTimeout(rafRef.current); cancelAnimationFrame(rafRef.current); }
-    if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
-    streamRef.current = null;
-  };
-  useEffect(() => () => stopCamera(), []);
-
-  const handleStart = async () => {
-    setPhase("loading"); setMsg("Loading models…");
-    try {
-      await FaceEngine.load();
-      const rows = await DB.getFaceDescriptors();
-      if(!rows.length){ setPhase("idle"); setMsg(""); onFallback(); return; }
-
-      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user"}});
-      streamRef.current = stream;
-      const vid = videoRef.current;
-      if(!vid){ stopCamera(); return; }
-      vid.srcObject = stream;
-      await vid.play().catch(()=>{});
-      await new Promise(resolve => {
-        const check = () => {
-          if(vid.readyState >= 2 && vid.videoWidth > 0) resolve();
-          else requestAnimationFrame(check);
-        };
-        check();
-      });
-
-      await vid.play().catch(()=>{});
-      await new Promise(resolve => {
-        const check = () => {
-          if(vid.readyState >= 2 && vid.videoWidth > 0) resolve();
-          else requestAnimationFrame(check);
-        };
-        check();
-      });
-      setPhase("scanning"); setMsg("Hold still - scanning...");
-      const scan = async () => {
-        if(!videoRef.current) return;
-        try {
-          const emb = await FaceEngine.embed(videoRef.current);
-          if(emb){
-            const result = FaceEngine.match(emb, rows);
-            if(result){
-              stopCamera();
-              const u = users.find(x=>x.id===result.user.id);
-              if(u){
-                setPhase("matched"); setMsg("Welcome, " + u.name + "!");
-                setTimeout(()=>{ setPhase("idle"); setMsg(""); onSuccess(u); }, 1200);
-                return;
-              }
-            }
-          }
-        } catch(e){ console.warn("login scan error:", e); }
-        rafRef.current = setTimeout(scan, 300);
-      };
-      scan();
-    } catch(err){
-      console.error(err); stopCamera();
-      setPhase("failed"); setMsg("Face scan unavailable. Falling back to kiosk…");
-      setTimeout(()=>{ setPhase("idle"); setMsg(""); onFallback(); }, 1800);
-    }
-  };
-
-  const handleCancel = () => { stopCamera(); setPhase("idle"); setMsg(""); };
-
-  if(phase==="scanning"||phase==="loading") return (
-    <div style={{width:"100%",textAlign:"center"}}>
-      <div style={{position:"relative",width:220,height:165,margin:"0 auto 0.6rem",borderRadius:16,overflow:"hidden",background:"#111",border:`2px solid ${phase==="scanning"?C.green:C.blue}`}}>
-        <video ref={videoRef} autoPlay muted playsInline style={{width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)"}}/>
-        {phase==="loading"&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:"0.8rem"}}>Loading…</div>}
-        <div style={{position:"absolute",top:8,left:8,right:8,bottom:8,border:"2px solid rgba(255,255,255,0.3)",borderRadius:10,pointerEvents:"none"}}/>
-      </div>
-      <p style={{color:C.sub,fontSize:"0.78rem",marginBottom:"0.5rem"}}>{msg}</p>
-      <button onClick={handleCancel} style={{...btnGhost,fontSize:"0.75rem"}}>Cancel</button>
-    </div>
-  );
-  if(phase==="matched") return <div style={{textAlign:"center",padding:"0.4rem 0"}}><p style={{color:C.greenText,fontWeight:600,fontSize:"0.9rem"}}>{msg}</p></div>;
-  if(phase==="failed") return <div style={{textAlign:"center",padding:"0.4rem 0"}}><p style={{color:C.warn,fontSize:"0.8rem"}}>{msg}</p></div>;
-
-  return (
-    <button onClick={handleStart} style={{background:"#f5f5f7",border:"1px solid #e8e8ed",borderRadius:980,color:C.text,fontSize:"0.82rem",fontWeight:500,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",display:"inline-flex",alignItems:"center",gap:"0.4rem",padding:"0.45rem 1rem",width:"100%",justifyContent:"center"}}>
-      <span style={{fontSize:"1rem"}}>👤</span> Sign in with Face
-    </button>
-  );
-}
-
-// ── FaceKioskScan (kiosk banner) ──────────────────────────────────────────────
-function FaceKioskScan({users, records, onClock, onFallback}){
-  const [phase, setPhase] = useState("idle");
-  const [msg, setMsg] = useState("");
-  const [confirmed, setConfirmed] = useState(null);
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
-  const rafRef = useRef(null);
-
-  const isClockedIn = (userId) => {
-    const recs = [...records].filter(r=>r.userId===userId).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
-    return recs.length>0&&recs[0].type==="in";
-  };
-  const stopCamera = () => {
-    if(rafRef.current){ clearTimeout(rafRef.current); cancelAnimationFrame(rafRef.current); }
-    if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
-    streamRef.current = null;
-  };
-  useEffect(() => () => stopCamera(), []);
-
-  const handleStart = async () => {
-    setPhase("loading"); setMsg("Loading…");
-    try {
-      await FaceEngine.load();
-      const rows = await DB.getFaceDescriptors();
-      if(!rows.length){ setPhase("idle"); onFallback(); return; }
-
-      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user"}});
-      streamRef.current = stream;
-      const stream_vid = videoRef.current;
-      if(!stream_vid){ stopCamera(); return; }
-      stream_vid.srcObject = stream;
-
-      await stream_vid.play().catch(()=>{});
-      await new Promise(resolve => {
-        const check = () => {
-          if(stream_vid.readyState >= 2 && stream_vid.videoWidth > 0) resolve();
-          else requestAnimationFrame(check);
-        };
-        check();
-      });
-      setPhase("scanning"); setMsg("Look at the camera...");
-      const scan = async () => {
-        if(!videoRef.current) return;
-        try {
-          const emb = await FaceEngine.embed(videoRef.current);
-          if(emb){
-            const result = FaceEngine.match(emb, rows);
-            if(result){
-              stopCamera();
-              const u = users.find(x=>x.id===result.user.id);
-              if(u){
-                const type = isClockedIn(u.id) ? "out" : "in";
-                onClock(u.id, u.name, type);
-                setConfirmed({name:u.name, type});
-                setPhase("confirmed");
-                setTimeout(()=>{ setPhase("idle"); setConfirmed(null); }, 2500);
-                return;
-              }
-            }
-          }
-        } catch(e){ console.warn("kiosk scan error:", e); }
-        rafRef.current = setTimeout(scan, 300);
-      };
-      scan();
-    } catch(err){
-      console.error(err); stopCamera(); setPhase("idle");
-    }
-  };
-
-  if(phase==="confirmed"&&confirmed){
-    const isIn = confirmed.type==="in";
-    return (
-      <div style={{background:isIn?"rgba(40,205,65,0.08)":"rgba(255,59,48,0.06)",border:`1px solid ${isIn?"rgba(40,205,65,0.3)":"rgba(255,59,48,0.2)"}`,borderRadius:14,padding:"0.85rem 1.1rem",margin:"0.75rem 0.75rem 0",display:"flex",alignItems:"center",gap:"0.75rem"}}>
-        <span style={{fontSize:"1.6rem"}}>{isIn?"✅":"👋"}</span>
-        <div>
-          <p style={{color:isIn?C.greenText:C.red,fontWeight:600,fontSize:"0.92rem",margin:0}}>{confirmed.name}</p>
-          <p style={{color:isIn?C.greenText:C.red,fontSize:"0.78rem",margin:0}}>{isIn?"Clocked In":"Clocked Out"} · {new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</p>
-        </div>
-      </div>
-    );
-  }
-  if(phase==="scanning"||phase==="loading") return (
-    <div style={{display:"flex",alignItems:"center",gap:"1rem",background:"#fff",border:`1px solid ${C.green}`,borderRadius:14,padding:"0.65rem 1rem",margin:"0.75rem 0.75rem 0"}}>
-      <div style={{position:"relative",width:88,height:66,borderRadius:10,overflow:"hidden",background:"#111",flexShrink:0,border:`1px solid ${C.green}`}}>
-        <video ref={videoRef} autoPlay muted playsInline style={{width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)"}}/>
-        {phase==="loading"&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:"0.65rem"}}>Loading…</div>}
-      </div>
-      <div style={{flex:1}}>
-        <p style={{color:C.greenText,fontWeight:600,fontSize:"0.82rem",margin:"0 0 0.15rem"}}>Face Scan Active</p>
-        <p style={{color:C.sub,fontSize:"0.73rem",margin:0}}>{msg}</p>
-      </div>
-      <button onClick={()=>{stopCamera();setPhase("idle");}} style={{...btnGhost,fontSize:"0.73rem",flexShrink:0,padding:"0.3rem 0.65rem"}}>Cancel</button>
-    </div>
-  );
-  return (
-    <div style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:14,padding:"0.65rem 1rem",margin:"0.75rem 0.75rem 0",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"1rem"}}>
-      <div>
-        <p style={{color:C.text,fontWeight:600,fontSize:"0.82rem",margin:"0 0 0.12rem"}}>👤 Face Clock-In / Out</p>
-        <p style={{color:C.sub,fontSize:"0.73rem",margin:0}}>Look at the camera to clock in automatically</p>
-      </div>
-      <button onClick={handleStart} style={{...btnPrimary,padding:"0.45rem 1rem",fontSize:"0.8rem",flexShrink:0}}>Start Scan</button>
-    </div>
-  );
-}
 
 // ── ShiftTable ────────────────────────────────────────────────────────────────
-function ShiftTable({pairs,showName=false,showBadge=false}){
+function SelfieThumb({url}){
+  const[open,setOpen]=useState(false);
+  if(!url) return <span style={{color:C.muted,fontSize:"0.72rem"}}>—</span>;
+  return(
+    <>
+      <img src={url} alt="selfie" onClick={()=>setOpen(true)}
+        style={{width:36,height:36,borderRadius:6,objectFit:"cover",cursor:"pointer",border:"1px solid #e8e8ed",display:"block"}}/>
+      {open&&(
+        <div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}}>
+          <div style={{position:"relative",maxWidth:360,width:"100%"}}>
+            <img src={url} alt="selfie" style={{width:"100%",borderRadius:16,display:"block"}}/>
+            <button onClick={()=>setOpen(false)} style={{position:"absolute",top:-12,right:-12,width:32,height:32,borderRadius:"50%",background:"#fff",border:"none",cursor:"pointer",fontSize:"1rem",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(0,0,0,0.3)"}}>✕</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function ShiftTable({pairs,showName=false,showBadge=false,showSelfie=false}){
   if(!pairs.length)return <div style={{textAlign:"center",padding:"2.5rem",color:C.muted,fontSize:"0.88rem"}}>No shifts recorded yet.</div>;
   return(
     <div style={{overflowX:"auto"}}>
@@ -593,6 +274,7 @@ function ShiftTable({pairs,showName=false,showBadge=false}){
           {showName&&<th style={TH}>Staff</th>}
           <th style={TH}>Date</th><th style={TH}>In</th><th style={TH}>Out</th><th style={TH}>Duration</th>
           {showBadge&&<th style={TH}>Location</th>}
+          {showSelfie&&<th style={TH}>Selfie</th>}
         </tr></thead>
         <tbody>{pairs.map((p,i)=>(
           <tr key={i} style={{background:i%2===0?"#fff":"#fafafa"}}>
@@ -602,6 +284,7 @@ function ShiftTable({pairs,showName=false,showBadge=false}){
             <td style={TD}>{p.outTime?fmtTime(p.outTime):<span style={{color:C.green,fontSize:"0.78rem",fontWeight:500}}>● Active</span>}</td>
             <td style={{...TD,color:C.sub,fontSize:"0.8rem"}}>{p.outTime?dur(p.inTime,p.outTime):"—"}</td>
             {showBadge&&<td style={TD}><SiteBadge onSite={p.onSite}/></td>}
+            {showSelfie&&<td style={TD}><SelfieThumb url={p.selfieUrl}/></td>}
           </tr>
         ))}</tbody>
       </table>
@@ -733,7 +416,7 @@ function GroupedRecords({pairs,showBadge=false}){
                           {chev(wop)}<span style={{color:C.sub,fontSize:"0.82rem"}}>{we.label}</span>{pill(we.pairs.length)}
                           {totalMs(we.pairs)&&<span style={{marginLeft:"auto",color:C.muted,fontSize:"0.72rem"}}>{totalMs(we.pairs)}</span>}
                         </div>
-                        {wop&&<ShiftTable pairs={we.pairs} showName={showBadge} showBadge={showBadge}/>}
+                        {wop&&<ShiftTable pairs={we.pairs} showName={showBadge} showBadge={showBadge} showSelfie={showBadge}/>}
                       </div>
                     );
                   })}
@@ -796,15 +479,7 @@ function UserManagement({users, onAdd, onDelete, onUpdate}){
   const[err,setErr]=useState("");
   const[ok,setOk]=useState("");
   const[confirm,setConfirm]=useState(null);
-  const[editing,setEditing]=useState(null);
-  const[enrollTarget,setEnrollTarget]=useState(null);
-  // Track which users have face enrolled (from Supabase data, passed via users prop)
-  // We'll use a local set updated on enroll/clear
-  const[enrolledIds,setEnrolledIds]=useState(new Set(
-    users.filter(u=>u.face_descriptor).map(u=>u.id)
-  ));
-
-  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const[editing,setEditing]=useState(null);  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
   const toggleDept=d=>set("departments",form.departments.includes(d)?form.departments.filter(x=>x!==d):[...form.departments,d]);
 
   const handleAdd=()=>{
@@ -815,27 +490,11 @@ function UserManagement({users, onAdd, onDelete, onUpdate}){
     setForm(blank);setOk("User created.");setTimeout(()=>setOk(""),3000);
   };
 
-  const handleClearFace = async (userId) => {
-    await DB.clearFaceDescriptor(userId);
-    setEnrolledIds(s=>{ const n=new Set(s); n.delete(userId); return n; });
-  };
-
   const iSt=inp({marginTop:0});
   const lSt={...lbl,marginTop:0,marginBottom:"0.3rem"};
 
   return(
     <div>
-      {enrollTarget&&(
-        <FaceEnrollModal
-          user={enrollTarget}
-          onClose={()=>setEnrollTarget(null)}
-          onEnrolled={(id)=>{
-            setEnrolledIds(s=>new Set([...s,id]));
-            setEnrollTarget(null);
-          }}
-        />
-      )}
-
       <div style={secH}>Staff Accounts</div>
       <div style={{...cardStyle,marginBottom:"2rem"}}>
         <div style={{overflowX:"auto"}}>
@@ -845,7 +504,6 @@ function UserManagement({users, onAdd, onDelete, onUpdate}){
               <th style={TH}>Username</th>
               <th style={TH}>Role</th>
               <th style={TH}>PIN</th>
-              <th style={TH}>Face ID</th>
               <th style={TH}>Departments</th>
               <th style={TH}>Action</th>
             </tr></thead>
@@ -861,25 +519,7 @@ function UserManagement({users, onAdd, onDelete, onUpdate}){
                     <PinEditor userId={u.id} currentPin={u.pin||""} onSave={(pin)=>onUpdate(u.id,{pin})}/>
                   )}
                 </td>
-                {/* Face ID column */}
-                <td style={TD}>
-                  {u.role==="admin"?(
-                    <span style={{color:C.muted,fontSize:"0.75rem"}}>—</span>
-                  ):enrolledIds.has(u.id)?(
-                    <div style={{display:"flex",alignItems:"center",gap:"0.4rem",flexWrap:"wrap"}}>
-                      <span style={{display:"inline-flex",alignItems:"center",gap:"0.25rem",background:"rgba(40,205,65,0.08)",border:"1px solid rgba(40,205,65,0.28)",borderRadius:20,padding:"0.15rem 0.55rem",fontSize:"0.67rem",fontWeight:700,color:C.greenText}}>
-                        ✓ Enrolled
-                      </span>
-                      <button onClick={()=>setEnrollTarget(u)} style={{background:"none",border:"none",color:C.blue,fontSize:"0.7rem",cursor:"pointer",padding:0}}>Re-enroll</button>
-                      <button onClick={()=>handleClearFace(u.id)} style={{background:"none",border:"none",color:C.red,fontSize:"0.7rem",cursor:"pointer",padding:0}}>Clear</button>
-                    </div>
-                  ):(
-                    <button onClick={()=>setEnrollTarget(u)}
-                      style={{background:"#f5f5f7",border:"1px solid #e8e8ed",borderRadius:980,color:C.text,padding:"0.22rem 0.65rem",fontSize:"0.72rem",fontWeight:500,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",display:"inline-flex",alignItems:"center",gap:"0.3rem"}}>
-                      <span>👤</span> Enroll Face
-                    </button>
-                  )}
-                </td>
+
                 <td style={TD}>
                   {editing===u.id?(
                     <div>
@@ -1000,11 +640,103 @@ function JournalAdmin({entries,onAdd,onDelete,currentUser}){
   );
 }
 
+
+// ── SelfieCapture ─────────────────────────────────────────────────────────────
+// Opens front camera, takes a photo, returns compressed blob via onCapture(blob)
+// onSkip() is called if camera unavailable or user skips
+function SelfieCapture({userName, onCapture, onSkip}){
+  const [phase, setPhase] = useState("starting"); // starting|ready|captured|error
+  const [msg, setMsg] = useState("");
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+
+  const stopCamera = () => {
+    if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
+    streamRef.current = null;
+  };
+
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:480}}});
+        streamRef.current = stream;
+        if(videoRef.current){
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(()=>{});
+        }
+        setPhase("ready");
+      }catch(e){
+        console.warn("Selfie camera error:", e);
+        setMsg("Camera unavailable");
+        setPhase("error");
+        setTimeout(()=>{ onSkip(); }, 1200);
+      }
+    })();
+    return ()=>stopCamera();
+  },[]);
+
+  const takePhoto = () => {
+    const vid = videoRef.current;
+    const canvas = canvasRef.current;
+    if(!vid||!canvas) return;
+    // Draw to canvas at 480x360 — good enough for ID, small file
+    canvas.width = 480; canvas.height = 360;
+    const ctx = canvas.getContext("2d");
+    // Mirror correction — video is mirrored via CSS, capture unmirrored
+    ctx.save();
+    ctx.scale(-1,1);
+    ctx.drawImage(vid, -480, 0, 480, 360);
+    ctx.restore();
+    canvas.toBlob(blob=>{
+      stopCamera();
+      setPhase("captured");
+      onCapture(blob);
+    }, "image/jpeg", 0.65);
+  };
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:200,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"1.5rem"}}>
+      <div style={{width:"100%",maxWidth:380,display:"flex",flexDirection:"column",alignItems:"center",gap:"1rem"}}>
+        <div style={{color:"#fff",fontSize:"1rem",fontWeight:600,textAlign:"center"}}>
+          Quick selfie for {userName}
+        </div>
+        <div style={{color:"rgba(255,255,255,0.55)",fontSize:"0.78rem",textAlign:"center"}}>
+          Look at the camera and tap the button
+        </div>
+        <div style={{position:"relative",width:"100%",borderRadius:20,overflow:"hidden",background:"#000",aspectRatio:"4/3",border:"2px solid rgba(255,255,255,0.15)"}}>
+          <video ref={videoRef} autoPlay muted playsInline style={{width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)"}}/>
+          {/* Face guide oval */}
+          <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none"}}>
+            <div style={{width:"55%",aspectRatio:"3/4",borderRadius:"50%",border:"2px dashed rgba(255,255,255,0.4)"}}/>
+          </div>
+          {phase==="starting"&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:"0.85rem"}}>Starting camera...</div>}
+          {phase==="captured"&&<div style={{position:"absolute",inset:0,background:"rgba(40,205,65,0.3)",display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{fontSize:"4rem"}}>✓</div></div>}
+          {phase==="error"&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:"0.85rem"}}>{msg}</div>}
+        </div>
+        <canvas ref={canvasRef} style={{display:"none"}}/>
+        {phase==="ready"&&(
+          <div style={{display:"flex",gap:"0.75rem",width:"100%"}}>
+            <button onClick={takePhoto} style={{flex:1,background:C.green,border:"none",borderRadius:980,color:"#fff",padding:"0.9rem",fontSize:"1rem",fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
+              📸 Take Photo
+            </button>
+            <button onClick={()=>{stopCamera();onSkip();}} style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:980,color:"rgba(255,255,255,0.7)",padding:"0.9rem 1.2rem",fontSize:"0.85rem",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
+              Skip
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── StaffView ─────────────────────────────────────────────────────────────────
 function StaffView({user,records,onClock,innCoords,journalEntries,readEntries,onRead}){
   const[locMsg,setLocMsg]=useState(null);
   const[locColor,setLocColor]=useState(C.sub);
   const[showPast,setShowPast]=useState(false);
+  const[showSelfie,setShowSelfie]=useState(false);
+  const pendingClockRef=useRef(null); // stores {type,coords,onSite} while selfie is open
   const userRecs=[...records].filter(r=>r.userId===user.id).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
   const isClockedIn=userRecs.length>0&&userRecs[0].type==="in";
   const allPairs=buildPairs(records,user.id);
@@ -1013,9 +745,9 @@ function StaffView({user,records,onClock,innCoords,journalEntries,readEntries,on
   const myEntries=journalEntries.filter(e=>e.departments.some(d=>myDepts.includes(d))&&!readEntries.includes(e.id));
   const pastEntries=journalEntries.filter(e=>e.departments.some(d=>myDepts.includes(d))&&readEntries.includes(e.id));
 
-  const handleClock=async(type)=>{
-    setLocMsg("📡 Getting location…");setLocColor(C.sub);
-    const doRec=(coords,onSite)=>onClock(type,coords,onSite);
+  const doClockWithLocation = (type, selfieBlob) => {
+    setLocMsg("📡 Getting location…"); setLocColor(C.sub);
+    const doRec=(coords,onSite)=>onClock(type,coords,onSite,selfieBlob);
     if(!navigator.geolocation){doRec(null,null);return;}
     navigator.geolocation.getCurrentPosition(pos=>{
       const loc={lat:pos.coords.latitude,lng:pos.coords.longitude};
@@ -1027,8 +759,29 @@ function StaffView({user,records,onClock,innCoords,journalEntries,readEntries,on
     },()=>{setLocMsg(null);doRec(null,null);},{enableHighAccuracy:true,timeout:10000});
   };
 
+  const handleClock=async(type)=>{
+    if(type==="in"){
+      // Show selfie capture before clocking in
+      pendingClockRef.current = type;
+      setShowSelfie(true);
+    } else {
+      doClockWithLocation(type, null);
+    }
+  };
+
+  const handleSelfieCapture=(blob)=>{
+    setShowSelfie(false);
+    doClockWithLocation(pendingClockRef.current, blob);
+  };
+
+  const handleSelfieSkip=()=>{
+    setShowSelfie(false);
+    doClockWithLocation(pendingClockRef.current, null);
+  };
+
   return(
     <div style={{maxWidth:700,margin:"0 auto",padding:"2rem 1.5rem 5rem"}}>
+      {showSelfie&&<SelfieCapture userName={user.name} onCapture={handleSelfieCapture} onSkip={handleSelfieSkip}/>}
       <div style={{...cardStyle,padding:"2.5rem 2rem 2rem",marginBottom:"1.5rem",textAlign:"center",overflow:"visible"}}>
         <div style={{marginBottom:"0.8rem"}}>
           <div style={{fontFamily:"'DM Sans',sans-serif",fontSize:"1.55rem",fontWeight:400,color:C.text,letterSpacing:"0.02em",lineHeight:1.15}}>Ocean Island Inn</div>
@@ -1113,7 +866,8 @@ function AdminView({users,records,innCoords,onSaveCoords,onAddUser,onDeleteUser,
         {[{lbl:"Currently In",val:activePairs.length,sub:activePairs.slice(0,2).map(p=>p.name.split(" ")[0]).join(", ")||"None"},
           {lbl:"Shifts Today",val:todayPairs.length,sub:"clock-ins"},
           {lbl:"Total Staff",val:staffUsers.length,sub:"accounts"},
-          {lbl:"Remote Logins",val:allPairs.filter(p=>p.onSite===false).length,sub:"flagged",warn:allPairs.filter(p=>p.onSite===false).length>0}
+          {lbl:"Remote Logins",val:allPairs.filter(p=>p.onSite===false).length,sub:"flagged",warn:allPairs.filter(p=>p.onSite===false).length>0},
+          {lbl:"Device Alerts",val:(()=>{const seen={};allPairs.forEach(p=>{if(p.deviceId){if(!seen[p.userId])seen[p.userId]=new Set();seen[p.userId].add(p.deviceId);}});return Object.values(seen).filter(s=>s.size>1).length;})(),sub:"multi-device users",warn:true}
         ].map((s,i)=>(
           <div key={i} style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:16,padding:"1.1rem 1.3rem",boxShadow:"0 1px 6px rgba(0,0,0,0.04)"}}>
             <div style={{color:C.muted,fontSize:"0.66rem",letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:"0.2rem"}}>{s.lbl}</div>
@@ -1152,12 +906,48 @@ function AdminView({users,records,innCoords,onSaveCoords,onAddUser,onDeleteUser,
                     <td style={TD}>{ap?fmtTime(ap.inTime):"—"}</td>
                     <td style={{...TD,color:C.sub,fontSize:"0.8rem"}}>{ap?dur(ap.inTime,new Date().toISOString()):"—"}</td>
                     <td style={TD}>{ap?<SiteBadge onSite={ap.onSite}/>:"—"}</td>
+                    <td style={TD}>{ap&&ap.deviceType?<span style={{fontSize:"0.75rem",color:C.sub}}>{ap.deviceType==="iPhone"?"📱":ap.deviceType==="Android"?"📱":ap.deviceType==="iPad"?"📲":"🖥"} {ap.deviceType}</span>:<span style={{color:C.muted,fontSize:"0.75rem"}}>—</span>}</td>
                   </tr>
                 );
               })}</tbody>
             </table>
           </div>
         </div>
+
+        {/* Device Alerts */}
+        {(()=>{
+          const byUser={};
+          allPairs.forEach(p=>{
+            if(!p.deviceId) return;
+            if(!byUser[p.userId]) byUser[p.userId]={name:p.name,devices:new Map()};
+            if(!byUser[p.userId].devices.has(p.deviceId))
+              byUser[p.userId].devices.set(p.deviceId,{type:p.deviceType,ip:p.ip,lastSeen:p.inTime});
+          });
+          const flagged=Object.values(byUser).filter(u=>u.devices.size>1);
+          if(!flagged.length) return null;
+          return(
+            <div style={{marginTop:"1.5rem"}}>
+              <div style={{...secH,color:C.warn}}>&#9888; Device Alerts</div>
+              <div style={{display:"flex",flexDirection:"column",gap:"0.6rem"}}>
+                {flagged.map((u,i)=>(
+                  <div key={i} style={{background:"#fff",border:"1px solid rgba(255,159,10,0.35)",borderRadius:14,padding:"1rem 1.3rem"}}>
+                    <div style={{fontWeight:600,color:C.text,fontSize:"0.9rem",marginBottom:"0.5rem"}}>{u.name} logged in from {u.devices.size} different devices</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:"0.3rem"}}>
+                      {[...u.devices.entries()].map(([id,d],j)=>(
+                        <div key={j} style={{display:"flex",alignItems:"center",gap:"0.75rem",fontSize:"0.78rem",color:C.sub,flexWrap:"wrap"}}>
+                          <span style={{fontFamily:"monospace",background:"#f5f5f7",padding:"0.1rem 0.4rem",borderRadius:4,fontSize:"0.7rem"}}>{id}</span>
+                          <span>{d.type==="iPhone"?"iPhone":d.type==="Android"?"Android":d.type==="iPad"?"iPad":"Desktop"}</span>
+                          {d.ip&&<span style={{fontFamily:"monospace",color:C.muted,fontSize:"0.7rem"}}>{d.ip}</span>}
+                          <span style={{color:C.muted,fontSize:"0.7rem",marginLeft:"auto"}}>last {fmtDateShort(d.lastSeen)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
       )}
 
       {tab==="records"&&(
@@ -1216,6 +1006,7 @@ function KioskView({users,records,onKioskClock,onExit}){
   const[error,setError]=useState("");
   const[confirmed,setConfirmed]=useState(null);
   const[activeLetter,setActiveLetter]=useState("ALL");
+  const[showKioskSelfie,setShowKioskSelfie]=useState(null);
   const gridRef=useRef(null);
 
   const staffUsers=users.filter(u=>u.role==="staff").sort((a,b)=>a.name.localeCompare(b.name));
@@ -1236,9 +1027,15 @@ function KioskView({users,records,onKioskClock,onExit}){
         const correctPin=(selected.pin||"0000");
         if(next===correctPin){
           const type=isClockedIn(selected.id)?"out":"in";
-          onKioskClock(selected.id,selected.name,type);
-          setConfirmed({type,name:selected.name});
-          setTimeout(()=>{setSelected(null);setPin("");setConfirmed(null);},2500);
+          if(type==="in"){
+            // Show selfie before clocking in
+            setShowKioskSelfie({userId:selected.id,name:selected.name});
+            setSelected(null);setPin("");
+          } else {
+            onKioskClock(selected.id,selected.name,type);
+            setConfirmed({type,name:selected.name});
+            setTimeout(()=>{setSelected(null);setPin("");setConfirmed(null);},2500);
+          }
         } else {
           setError("Incorrect PIN. Try again.");
           setPin("");
@@ -1316,6 +1113,25 @@ function KioskView({users,records,onKioskClock,onExit}){
 
   return(
     <div style={{minHeight:"100vh",background:"#f0f0f5",display:"flex",flexDirection:"column",fontFamily:"'DM Sans',sans-serif"}}>
+      {showKioskSelfie&&(
+        <SelfieCapture
+          userName={showKioskSelfie.name}
+          onCapture={(blob)=>{
+            const u=showKioskSelfie;
+            setShowKioskSelfie(null);
+            onKioskClock(u.userId,u.name,"in",blob);
+            setConfirmed({type:"in",name:u.name});
+            setTimeout(()=>setConfirmed(null),2500);
+          }}
+          onSkip={()=>{
+            const u=showKioskSelfie;
+            setShowKioskSelfie(null);
+            onKioskClock(u.userId,u.name,"in",null);
+            setConfirmed({type:"in",name:u.name});
+            setTimeout(()=>setConfirmed(null),2500);
+          }}
+        />
+      )}
       {/* Header */}
       <div style={{background:C.blue,padding:"0.85rem 1.5rem",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <div>
@@ -1334,21 +1150,13 @@ function KioskView({users,records,onKioskClock,onExit}){
 
       {/* Sub-header */}
       <div style={{background:"#fff",borderBottom:"1px solid #e8e8ed",padding:"0.65rem 1.5rem",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <span style={{color:C.sub,fontSize:"0.84rem"}}>Use face scan or select your name and enter your PIN</span>
+        <span style={{color:C.sub,fontSize:"0.84rem"}}>Select your name and enter your PIN</span>
         <span style={{color:C.muted,fontSize:"0.78rem"}}>{filtered.length} staff shown</span>
       </div>
 
       {/* Main area */}
       <div style={{display:"flex",flex:1,overflow:"hidden"}}>
         <div style={{flex:1,overflowY:"auto"}}>
-          {/* Face scan banner */}
-          <FaceKioskScan
-            users={staffUsers}
-            records={records}
-            onClock={onKioskClock}
-            onFallback={()=>{}}
-          />
-
           {/* Staff grid */}
           <div ref={gridRef} style={{padding:"0.75rem"}}>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:"0.65rem"}}>
@@ -1466,14 +1274,28 @@ function App(){
     setUser({...u});
   };
 
-  const handleClock=useCallback(async(type,coords,onSite)=>{
-    const rec={id:mkId(),userId:user.id,userName:user.name,type,timestamp:new Date().toISOString(),lat:coords?.lat??null,lng:coords?.lng??null,onSite};
+  const handleClock=useCallback(async(type,coords,onSite,selfieBlob)=>{
+    const dev=await getDeviceInfo();
+    const recId=mkId();
+    // Upload selfie first if provided, get URL
+    let selfieUrl=null;
+    if(selfieBlob){
+      selfieUrl=await DB.uploadSelfie(recId, selfieBlob);
+    }
+    const rec={id:recId,userId:user.id,userName:user.name,type,timestamp:new Date().toISOString(),lat:coords?.lat??null,lng:coords?.lng??null,onSite,ip:dev.ip,deviceId:dev.deviceId,deviceType:dev.deviceType,selfieUrl};
     const updated=[...records,rec];setRecords(updated);await DB.insertRecord(rec);
+    // Auto-delete selfies older than 90 days (run quietly in background)
+    if(type==="in") DB.deleteOldSelfies(90).catch(()=>{});
   },[user,records]);
 
-  const handleKioskClock=useCallback(async(userId,userName,type)=>{
-    const rec={id:mkId(),userId,userName,type,timestamp:new Date().toISOString(),lat:null,lng:null,onSite:true};
+  const handleKioskClock=useCallback(async(userId,userName,type,selfieBlob)=>{
+    const dev=await getDeviceInfo();
+    const recId=mkId();
+    let selfieUrl=null;
+    if(selfieBlob) selfieUrl=await DB.uploadSelfie(recId,selfieBlob);
+    const rec={id:recId,userId,userName,type,timestamp:new Date().toISOString(),lat:null,lng:null,onSite:true,ip:dev.ip,deviceId:dev.deviceId,deviceType:dev.deviceType,selfieUrl};
     const updated=[...records,rec];setRecords(updated);await DB.insertRecord(rec);
+    if(type==="in") DB.deleteOldSelfies(90).catch(()=>{});
   },[records]);
 
   const handleSaveCoords=useCallback(async(coords)=>{setInnCoords(coords);await DB.setCoords(coords);},[]);
@@ -1540,15 +1362,10 @@ function App(){
               </div>
             </div>
 
-            {/* Face + Kiosk options */}
-            <div style={{marginTop:"1.2rem",borderTop:"1px solid #e8e8ed",paddingTop:"1.1rem",display:"flex",flexDirection:"column",gap:"0.5rem"}}>
-              <FaceLoginButton
-                users={users}
-                onSuccess={(u)=>{setReadEntries([]);setUser({...u});}}
-                onFallback={()=>setShowKiosk(true)}
-              />
-              <button onClick={()=>setShowKiosk(true)} style={{background:"#f5f5f7",border:"1px solid #e8e8ed",borderRadius:980,color:C.text,fontSize:"0.82rem",fontWeight:500,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",display:"inline-flex",alignItems:"center",gap:"0.4rem",padding:"0.45rem 1rem",justifyContent:"center",width:"100%"}}>
-                <span>🖥</span> Use Staff Kiosk instead
+            {/* Kiosk option */}
+            <div style={{marginTop:"1.2rem",borderTop:"1px solid #e8e8ed",paddingTop:"1rem",textAlign:"center"}}>
+              <button onClick={()=>setShowKiosk(true)} style={{background:"none",border:"none",color:C.blue,fontSize:"0.82rem",fontWeight:500,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",display:"inline-flex",alignItems:"center",gap:"0.35rem"}}>
+                🖥 Use Staff Kiosk instead
               </button>
             </div>
           </div>
