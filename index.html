@@ -90,14 +90,21 @@ const DB = {
     return(data||[]).map(r=>({id:r.id,userId:r.user_id,userName:r.user_name,type:r.type,timestamp:r.timestamp,lat:r.lat,lng:r.lng,onSite:r.on_site,ip:r.ip,deviceId:r.device_id,deviceType:r.device_type,selfieUrl:r.selfie_url}));
   },
   async insertRecord(rec){
-    const{error}=await sb.from("clock_records").insert({
+    const payload={
       id:rec.id, user_id:rec.userId, user_name:rec.userName,
       type:rec.type, timestamp:rec.timestamp,
       lat:rec.lat??null, lng:rec.lng??null, on_site:rec.onSite??null,
       ip:rec.ip??null, device_id:rec.deviceId??null, device_type:rec.deviceType??null,
       selfie_url:rec.selfieUrl??null,
-    });
-    if(error)console.error("insertRecord",error);
+    };
+    console.log("[insertRecord] payload:", JSON.stringify(payload));
+    const{error}=await sb.from("clock_records").insert(payload);
+    if(error){
+      console.error("[insertRecord] ERROR:", error.message, error);
+      alert("[DB Error] " + error.message);
+    } else {
+      console.log("[insertRecord] SUCCESS");
+    }
   },
   async getJournal(){
     const{data,error}=await sb.from("journal_entries").select("*").order("created_at",{ascending:true});
@@ -868,7 +875,7 @@ function AdminView({users,records,innCoords,onSaveCoords,onAddUser,onDeleteUser,
 
   const doSave=async()=>{await onSaveCoords({lat:parseFloat(cf.lat),lng:parseFloat(cf.lng)});setSaveMsg("✓ Saved");setTimeout(()=>setSaveMsg(""),2500);};
 
-  const TABS=[["live","🟢 Live"],["records","📊 Records"],["journal","💬 Messages"],["users","👥 Users"],["settings","⚙️ Settings"]];
+  const TABS=[["live","🟢 Live"],["records","📊 Records"],["users","👥 Users"],["settings","⚙️ Settings"]];
   const selSt={background:"#fff",border:"1px solid #d2d2d7",borderRadius:10,color:C.text,padding:"0.52rem 1rem",fontFamily:"'DM Sans',sans-serif",fontSize:"0.84rem",outline:"none"};
 
   return(
@@ -972,7 +979,6 @@ function AdminView({users,records,innCoords,onSaveCoords,onAddUser,onDeleteUser,
         </div>
       )}
 
-      {tab==="journal"&&<JournalAdmin entries={journalEntries} onAdd={onAddEntry} onDelete={onDeleteEntry} currentUser={currentUser}/>}
       {tab==="users"&&<UserManagement users={users} onAdd={onAddUser} onDelete={onDeleteUser} onUpdate={onUpdateUser}/>}
 
       {tab==="settings"&&(
@@ -1348,7 +1354,7 @@ function App(){
       {showKiosk?(
         <KioskView users={users} records={records} onKioskClock={handleKioskClock} onExit={()=>setShowKiosk(false)}/>
       ):!user?(
-        <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"2rem"}}>
+        <div style={{minHeight:"100vh",height:"100vh",overflow:"hidden",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"2rem"}}>
           <div style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:24,padding:"2.8rem 2.4rem",width:"100%",maxWidth:385,boxShadow:"0 4px 32px rgba(0,0,0,0.08)"}}>
             <div style={{textAlign:"center",marginBottom:"2rem"}}>
               <div style={{fontFamily:"'DM Sans',sans-serif",fontSize:"1.75rem",fontWeight:400,color:C.text,letterSpacing:"0.02em",lineHeight:1.2}}>Ocean Island Inn</div>
