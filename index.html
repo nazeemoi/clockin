@@ -7,6 +7,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
   <meta name="apple-mobile-web-app-title" content="OI Time Clock"/>
   <meta name="theme-color" content="#f5f5f7"/>
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet"/>
+  <meta name="googlebot" content="noindex, nofollow"/>
   <title>Ocean Island Inn · Staff Time Clock</title>
   <link rel="manifest" href="manifest.json"/>
   <style>
@@ -32,7 +34,7 @@ const LOGO_URL    = "https://d3no58tkbpefzl.cloudfront.net/OILogo.png";
 const DEPARTMENTS  = ["Front Desk Supervisors","Front Desk Agents","Graves","Housekeeping"];
 
 const SEED_USERS = [
-  { id:"admin",      username:"admin",     name:"Manager",          password:"admin123", pin:"",     role:"admin",  departments:[] },
+  { id:"admin",      username:"admin",     name:"Manager",          password:"858525",   pin:"858525", role:"admin",  departments:[] },
   { id:"asadu",      username:"asadu",     name:"Asadu",            password:"pass123",  pin:"0000", role:"staff",  departments:[] },
   { id:"asha",       username:"asha",      name:"Asha",             password:"pass123",  pin:"0000", role:"staff",  departments:[] },
   { id:"agustina",   username:"agustina",  name:"Agustina (Wu)",    password:"pass123",  pin:"0000", role:"staff",  departments:[] },
@@ -131,7 +133,6 @@ const DB = {
   async setCoords(coords){
     await sb.from("users").upsert({id:"__coords__",username:"__coords__",name:"__coords__",role:"system",pin:JSON.stringify(coords)},{onConflict:"id"});
   },
-  // ── Selfie storage ──────────────────────────────────────────────────────
   async uploadSelfie(recordId, blob){
     const path = `selfies/${recordId}.jpg`;
     console.log("[Selfie] Uploading to path:", path, "blob size:", blob?.size);
@@ -140,7 +141,6 @@ const DB = {
     if(error){
       console.error("[Selfie] Upload error:", error.message, error);
       window._selfieDebug = `ERROR: ${error.message}`;
-      // Show on-screen alert so phone users can see it
       setTimeout(()=>alert("[Selfie Error] " + error.message), 500);
       return null;
     }
@@ -192,10 +192,8 @@ function exportCSV(records){
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([hdr+rows],{type:"text/csv"}));a.download=`OceanIslandInn_${new Date().toISOString().slice(0,10)}.csv`;a.click();
 }
 
-
 // ── Device fingerprint ────────────────────────────────────────────────────────
 async function getDeviceInfo(){
-  // Stable device fingerprint from browser characteristics
   const fp = [
     navigator.userAgent,
     navigator.language,
@@ -205,24 +203,20 @@ async function getDeviceInfo(){
     navigator.hardwareConcurrency||'',
     navigator.deviceMemory||'',
   ].join('|');
-  // Hash it to a short ID
   let hash = 0;
   for(let i=0;i<fp.length;i++){ hash = ((hash<<5)-hash)+fp.charCodeAt(i); hash|=0; }
   const deviceId = Math.abs(hash).toString(36);
-  // Detect mobile
-  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
   const deviceType = /iPhone/i.test(navigator.userAgent)?'iPhone'
     :/iPad/i.test(navigator.userAgent)?'iPad'
     :/Android/i.test(navigator.userAgent)?'Android'
     :'Desktop';
-  // Get public IP via free API
   let ip = null;
   try{
     const r = await fetch('https://api.ipify.org?format=json',{signal:AbortSignal.timeout(3000)});
     const d = await r.json();
     ip = d.ip;
   }catch(e){}
-  return {deviceId, deviceType, isMobile, ip, ua: navigator.userAgent.slice(0,120)};
+  return {deviceId, deviceType, ip, ua: navigator.userAgent.slice(0,120)};
 }
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
@@ -236,6 +230,9 @@ const secH={color:C.text,fontSize:"1.05rem",fontWeight:600,marginBottom:"1rem"};
 const btnPrimary={background:C.blue,border:"none",borderRadius:980,color:"#fff",padding:"0.72rem 1.6rem",fontFamily:"'DM Sans',sans-serif",fontWeight:500,fontSize:"0.88rem",cursor:"pointer"};
 const btnGhost={background:"#f5f5f7",border:"1px solid #e8e8ed",borderRadius:980,color:C.text,padding:"0.38rem 0.9rem",fontFamily:"'DM Sans',sans-serif",fontSize:"0.8rem",fontWeight:500,cursor:"pointer"};
 const btnDanger={background:"rgba(255,59,48,0.08)",border:"1px solid rgba(255,59,48,0.22)",borderRadius:8,color:C.red,padding:"0.38rem 0.85rem",fontFamily:"'DM Sans',sans-serif",fontSize:"0.8rem",fontWeight:600,cursor:"pointer"};
+
+// ── Selfie filter style (sepia) ───────────────────────────────────────────────
+const SELFIE_FILTER = "sepia(60%) contrast(1.05) brightness(0.97)";
 
 // ── Small components ──────────────────────────────────────────────────────────
 function SiteBadge({onSite}){
@@ -259,10 +256,75 @@ function LiveClock(){
   return <div style={{fontSize:"3rem",fontWeight:300,color:C.text,letterSpacing:"-0.03em",lineHeight:1}}>{now.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</div>;
 }
 
+// ── UserSelfieGallery: shows recent 3 + "View all" popup ─────────────────────
+function UserSelfieGallery({userName, selfieUrls}){
+  const [open, setOpen] = useState(false);
+  // selfieUrls: array sorted newest first, may have nulls — filter them
+  const urls = selfieUrls.filter(Boolean);
+  if(!urls.length) return <span style={{color:C.muted,fontSize:"0.72rem"}}>—</span>;
 
+  const recent = urls.slice(0, 3);
 
+  return(
+    <>
+      <div style={{display:"flex",alignItems:"center",gap:"0.35rem",flexWrap:"wrap"}}>
+        {recent.map((url,i)=>(
+          <img key={i} src={url} alt={`selfie ${i+1}`}
+            style={{width:36,height:36,borderRadius:6,objectFit:"cover",
+              border:"1px solid #e8e8ed",display:"block",
+              filter:SELFIE_FILTER,cursor:"pointer"}}
+            onClick={()=>setOpen(true)}
+          />
+        ))}
+        {urls.length > 3 && (
+          <button onClick={()=>setOpen(true)}
+            style={{height:36,padding:"0 0.6rem",borderRadius:6,border:"1px solid #d2d2d7",
+              background:"#f5f5f7",color:C.blue,fontSize:"0.72rem",fontWeight:600,cursor:"pointer",
+              fontFamily:"'DM Sans',sans-serif",whiteSpace:"nowrap"}}>
+            +{urls.length - 3} more
+          </button>
+        )}
+        {urls.length <= 3 && urls.length > 0 && (
+          <button onClick={()=>setOpen(true)}
+            style={{height:28,padding:"0 0.5rem",borderRadius:6,border:"1px solid #d2d2d7",
+              background:"none",color:C.blue,fontSize:"0.68rem",fontWeight:600,cursor:"pointer",
+              fontFamily:"'DM Sans',sans-serif",whiteSpace:"nowrap"}}>
+            View all
+          </button>
+        )}
+      </div>
 
-
+      {open && (
+        <div onClick={()=>setOpen(false)}
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:500,
+            display:"flex",alignItems:"center",justifyContent:"center",padding:"1.5rem"}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:"#fff",borderRadius:20,padding:"1.5rem",maxWidth:640,width:"100%",
+              maxHeight:"85vh",overflowY:"auto",position:"relative"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem"}}>
+              <div>
+                <div style={{fontWeight:600,fontSize:"1rem",color:C.text}}>{userName}</div>
+                <div style={{color:C.muted,fontSize:"0.75rem"}}>{urls.length} clock-in photo{urls.length!==1?"s":""}</div>
+              </div>
+              <button onClick={()=>setOpen(false)}
+                style={{width:32,height:32,borderRadius:"50%",border:"1px solid #e8e8ed",
+                  background:"#f5f5f7",cursor:"pointer",fontSize:"1rem",display:"flex",
+                  alignItems:"center",justifyContent:"center"}}>✕</button>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:"0.6rem"}}>
+              {urls.map((url,i)=>(
+                <div key={i} style={{borderRadius:10,overflow:"hidden",border:"1px solid #e8e8ed",aspectRatio:"4/3",background:"#f5f5f7"}}>
+                  <img src={url} alt={`Photo ${i+1}`}
+                    style={{width:"100%",height:"100%",objectFit:"cover",display:"block",filter:SELFIE_FILTER}}/>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 // ── ShiftTable ────────────────────────────────────────────────────────────────
 function SelfieThumb({url}){
@@ -271,11 +333,12 @@ function SelfieThumb({url}){
   return(
     <>
       <img src={url} alt="selfie" onClick={()=>setOpen(true)}
-        style={{width:36,height:36,borderRadius:6,objectFit:"cover",cursor:"pointer",border:"1px solid #e8e8ed",display:"block"}}/>
+        style={{width:36,height:36,borderRadius:6,objectFit:"cover",cursor:"pointer",
+          border:"1px solid #e8e8ed",display:"block",filter:SELFIE_FILTER}}/>
       {open&&(
         <div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}}>
           <div style={{position:"relative",maxWidth:360,width:"100%"}}>
-            <img src={url} alt="selfie" style={{width:"100%",borderRadius:16,display:"block"}}/>
+            <img src={url} alt="selfie" style={{width:"100%",borderRadius:16,display:"block",filter:SELFIE_FILTER}}/>
             <button onClick={()=>setOpen(false)} style={{position:"absolute",top:-12,right:-12,width:32,height:32,borderRadius:"50%",background:"#fff",border:"none",cursor:"pointer",fontSize:"1rem",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(0,0,0,0.3)"}}>✕</button>
           </div>
         </div>
@@ -378,11 +441,23 @@ function JournalStack({entries,onRead}){
 }
 
 // ── GroupedRecords ────────────────────────────────────────────────────────────
-function GroupedRecords({pairs,showBadge=false,showSelfie=false}){
+// Collects selfie URLs per user for the gallery view in admin Records tab
+function GroupedRecords({pairs,showBadge=false,showSelfie=false,allPairsForGallery=null}){
   const[openY,setOpenY]=useState({});
   const[openM,setOpenM]=useState({});
   const[openW,setOpenW]=useState({});
   if(!pairs.length)return <div style={{...cardStyle,padding:"3rem",textAlign:"center",color:C.muted,fontSize:"0.88rem"}}>No shifts recorded yet.</div>;
+
+  // Build a map of userId → all selfie URLs (newest first) for gallery
+  const userSelfies = {};
+  if(allPairsForGallery){
+    allPairsForGallery.forEach(p=>{
+      if(p.selfieUrl){
+        if(!userSelfies[p.userId]) userSelfies[p.userId] = {name:p.name, urls:[]};
+        userSelfies[p.userId].urls.push(p.selfieUrl);
+      }
+    });
+  }
 
   function wkStart(d){const m=new Date(d);m.setDate(d.getDate()-((d.getDay()+6)%7));m.setHours(0,0,0,0);return m;}
   function wkKey(d){return wkStart(d).toISOString().slice(0,10);}
@@ -406,6 +481,43 @@ function GroupedRecords({pairs,showBadge=false,showSelfie=false}){
   const totalMs=ps=>{let ms=0;ps.forEach(p=>{if(p.outTime)ms+=new Date(p.outTime)-new Date(p.inTime);});if(!ms)return null;return`${Math.floor(ms/3600000)}h ${Math.floor((ms%3600000)/60000)}m`;};
   const pill=n=><span style={{background:"#e8f0fe",border:"1px solid #c5d5f5",borderRadius:20,padding:"0.12rem 0.48rem",fontSize:"0.67rem",color:C.blue,marginLeft:"0.4rem"}}>{n} shift{n!==1?"s":""}</span>;
   const chev=o=><span style={{display:"inline-block",transform:o?"rotate(90deg)":"none",transition:"transform 0.18s",marginRight:"0.4rem",color:C.muted,fontSize:"0.72rem"}}>▶</span>;
+
+  // Custom ShiftTable that uses UserSelfieGallery instead of SelfieThumb
+  const ShiftTableWithGallery = ({pairs: wPairs, showName, showBadge: sb2, showSelfie: ss}) => {
+    if(!wPairs.length) return <div style={{textAlign:"center",padding:"2.5rem",color:C.muted,fontSize:"0.88rem"}}>No shifts recorded yet.</div>;
+    return(
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse"}}>
+          <thead><tr>
+            {showName&&<th style={TH}>Staff</th>}
+            <th style={TH}>Date</th><th style={TH}>In</th><th style={TH}>Out</th><th style={TH}>Duration</th>
+            {sb2&&<th style={TH}>Location</th>}
+            {ss&&<th style={TH}>Photos</th>}
+          </tr></thead>
+          <tbody>{wPairs.map((p,i)=>{
+            // For each row, get that user's full selfie history
+            const gallery = userSelfies[p.userId];
+            return(
+              <tr key={i} style={{background:i%2===0?"#fff":"#fafafa"}}>
+                {showName&&<td style={{...TD,fontWeight:500}}>{p.name}</td>}
+                <td style={{...TD,color:C.sub,fontSize:"0.8rem"}}>{fmtDate(p.inTime)}</td>
+                <td style={TD}>{fmtTime(p.inTime)}</td>
+                <td style={TD}>{p.outTime?fmtTime(p.outTime):<span style={{color:C.green,fontSize:"0.78rem",fontWeight:500}}>● Active</span>}</td>
+                <td style={{...TD,color:C.sub,fontSize:"0.8rem"}}>{p.outTime?dur(p.inTime,p.outTime):"—"}</td>
+                {sb2&&<td style={TD}><SiteBadge onSite={p.onSite}/></td>}
+                {ss&&<td style={TD}>
+                  {gallery
+                    ? <UserSelfieGallery userName={gallery.name} selfieUrls={gallery.urls}/>
+                    : <SelfieThumb url={p.selfieUrl}/>
+                  }
+                </td>}
+              </tr>
+            );
+          })}</tbody>
+        </table>
+      </div>
+    );
+  };
 
   return(
     <div style={{display:"flex",flexDirection:"column",gap:"0.6rem"}}>
@@ -435,7 +547,10 @@ function GroupedRecords({pairs,showBadge=false,showSelfie=false}){
                           {chev(wop)}<span style={{color:C.sub,fontSize:"0.82rem"}}>{we.label}</span>{pill(we.pairs.length)}
                           {totalMs(we.pairs)&&<span style={{marginLeft:"auto",color:C.muted,fontSize:"0.72rem"}}>{totalMs(we.pairs)}</span>}
                         </div>
-                        {wop&&<ShiftTable pairs={we.pairs} showName={showBadge} showBadge={showBadge} showSelfie={showSelfie}/>}
+                        {wop&&(showSelfie && allPairsForGallery
+                          ? <ShiftTableWithGallery pairs={we.pairs} showName={showBadge} showBadge={showBadge} showSelfie={showSelfie}/>
+                          : <ShiftTable pairs={we.pairs} showName={showBadge} showBadge={showBadge} showSelfie={showSelfie}/>
+                        )}
                       </div>
                     );
                   })}
@@ -498,7 +613,8 @@ function UserManagement({users, onAdd, onDelete, onUpdate}){
   const[err,setErr]=useState("");
   const[ok,setOk]=useState("");
   const[confirm,setConfirm]=useState(null);
-  const[editing,setEditing]=useState(null);  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const[editing,setEditing]=useState(null);
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
   const toggleDept=d=>set("departments",form.departments.includes(d)?form.departments.filter(x=>x!==d):[...form.departments,d]);
 
   const handleAdd=()=>{
@@ -539,7 +655,6 @@ function UserManagement({users, onAdd, onDelete, onUpdate}){
                     <PinEditor userId={u.id} currentPin={u.pin||""} onSave={(pin)=>onUpdate(u.id,{pin})}/>
                   )}
                 </td>
-
                 <td style={TD}>
                   {editing===u.id?(
                     <div>
@@ -660,12 +775,11 @@ function JournalAdmin({entries,onAdd,onDelete,currentUser}){
   );
 }
 
-
 // ── SelfieCapture ─────────────────────────────────────────────────────────────
-// Opens front camera, takes a photo, returns compressed blob via onCapture(blob)
-// onSkip() is called if camera unavailable or user skips
+// Shows a "get ready" message, then 3-2-1 countdown, then opens camera
 function SelfieCapture({userName, onCapture, onSkip}){
-  const [phase, setPhase] = useState("starting"); // starting|ready|captured|error
+  const [phase, setPhase] = useState("getready"); // getready|countdown|starting|ready|captured|error
+  const [countdown, setCountdown] = useState(3);
   const [msg, setMsg] = useState("");
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -676,34 +790,53 @@ function SelfieCapture({userName, onCapture, onSkip}){
     streamRef.current = null;
   };
 
-  useEffect(()=>{
-    (async()=>{
-      try{
-        const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:480}}});
-        streamRef.current = stream;
-        if(videoRef.current){
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(()=>{});
-        }
-        setPhase("ready");
-      }catch(e){
-        console.warn("Selfie camera error:", e);
-        setMsg("Camera unavailable");
-        setPhase("error");
-        setTimeout(()=>{ onSkip(); }, 1200);
+  const startCamera = async () => {
+    setPhase("starting");
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:480}}});
+      streamRef.current = stream;
+      if(videoRef.current){
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(()=>{});
       }
-    })();
-    return ()=>stopCamera();
-  },[]);
+      setPhase("ready");
+    }catch(e){
+      console.warn("Selfie camera error:", e);
+      setMsg("Camera unavailable");
+      setPhase("error");
+      setTimeout(()=>{ onSkip(); }, 1200);
+    }
+  };
+
+  // Phase 1: "Get ready" screen for 1.5s, then countdown
+  useEffect(()=>{
+    if(phase !== "getready") return;
+    const t = setTimeout(()=>{
+      setPhase("countdown");
+      setCountdown(3);
+    }, 1500);
+    return ()=>clearTimeout(t);
+  },[phase]);
+
+  // Phase 2: countdown 3 → 2 → 1, then start camera
+  useEffect(()=>{
+    if(phase !== "countdown") return;
+    if(countdown <= 0){
+      startCamera();
+      return;
+    }
+    const t = setTimeout(()=> setCountdown(c=>c-1), 1000);
+    return ()=>clearTimeout(t);
+  },[phase, countdown]);
+
+  useEffect(()=>{ return ()=>stopCamera(); },[]);
 
   const takePhoto = () => {
     const vid = videoRef.current;
     const canvas = canvasRef.current;
     if(!vid||!canvas) return;
-    // Draw to canvas at 480x360 — good enough for ID, small file
     canvas.width = 480; canvas.height = 360;
     const ctx = canvas.getContext("2d");
-    // Mirror correction — video is mirrored via CSS, capture unmirrored
     ctx.save();
     ctx.scale(-1,1);
     ctx.drawImage(vid, -480, 0, 480, 360);
@@ -715,6 +848,51 @@ function SelfieCapture({userName, onCapture, onSkip}){
     }, "image/jpeg", 0.65);
   };
 
+  // ── Get Ready screen ──
+  if(phase === "getready"){
+    return(
+      <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:200,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"2rem"}}>
+        <div style={{textAlign:"center",maxWidth:300}}>
+          <div style={{fontSize:"3.5rem",marginBottom:"1rem"}}>📸</div>
+          <div style={{color:"#fff",fontSize:"1.3rem",fontWeight:600,marginBottom:"0.6rem"}}>Get ready, {userName.split(" ")[0]}!</div>
+          <div style={{color:"rgba(255,255,255,0.6)",fontSize:"0.9rem",lineHeight:1.6}}>A photo will be taken when you clock in. Look straight at the camera.</div>
+          <button onClick={()=>{setPhase("countdown");setCountdown(3);}} style={{marginTop:"1.8rem",background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.3)",borderRadius:980,color:"#fff",padding:"0.7rem 1.8rem",fontSize:"0.9rem",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
+            OK, I'm ready
+          </button>
+          <div style={{marginTop:"0.9rem"}}>
+            <button onClick={()=>{onSkip();}} style={{background:"none",border:"none",color:"rgba(255,255,255,0.4)",fontSize:"0.8rem",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
+              Skip photo
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Countdown screen ──
+  if(phase === "countdown"){
+    const isGo = countdown <= 0;
+    return(
+      <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:200,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+        <div style={{textAlign:"center"}}>
+          <div style={{
+            fontSize:"8rem",fontWeight:700,lineHeight:1,
+            color: countdown === 1 ? "#ff9f0a" : countdown === 2 ? "#fff" : "#fff",
+            transition:"all 0.3s ease",
+            textShadow: countdown === 1 ? "0 0 40px rgba(255,159,10,0.6)" : "0 0 40px rgba(255,255,255,0.2)",
+            transform: `scale(${countdown === 0 ? 1.3 : 1})`,
+          }}>
+            {countdown === 0 ? "📸" : countdown}
+          </div>
+          <div style={{color:"rgba(255,255,255,0.55)",fontSize:"0.9rem",marginTop:"1rem"}}>
+            {countdown > 0 ? "Starting camera…" : ""}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Camera / Capture screen ──
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:200,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"1.5rem"}}>
       <div style={{width:"100%",maxWidth:380,display:"flex",flexDirection:"column",alignItems:"center",gap:"1rem"}}>
@@ -725,10 +903,12 @@ function SelfieCapture({userName, onCapture, onSkip}){
           Look at the camera and tap the button
         </div>
         <div style={{position:"relative",width:"100%",borderRadius:20,overflow:"hidden",background:"#000",aspectRatio:"4/3",border:"2px solid rgba(255,255,255,0.15)"}}>
-          <video ref={videoRef} autoPlay muted playsInline style={{width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)"}}/>
+          <video ref={videoRef} autoPlay muted playsInline
+            style={{width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)",
+              filter:SELFIE_FILTER}}/>
           {/* Face guide oval */}
           <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none"}}>
-            <div style={{width:"55%",aspectRatio:"3/4",borderRadius:"50%",border:"2px dashed rgba(255,255,255,0.4)"}}/>
+            <div style={{width:"55%",aspectRatio:"3/4",borderRadius:"50%",border:"2px dashed rgba(255,255,255,0.5)"}}/>
           </div>
           {phase==="starting"&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:"0.85rem"}}>Starting camera...</div>}
           {phase==="captured"&&<div style={{position:"absolute",inset:0,background:"rgba(40,205,65,0.3)",display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{fontSize:"4rem"}}>✓</div></div>}
@@ -756,7 +936,7 @@ function StaffView({user,records,onClock,innCoords,journalEntries,readEntries,on
   const[locColor,setLocColor]=useState(C.sub);
   const[showPast,setShowPast]=useState(false);
   const[showSelfie,setShowSelfie]=useState(false);
-  const pendingClockRef=useRef(null); // stores {type,coords,onSite} while selfie is open
+  const pendingClockRef=useRef(null);
   const userRecs=[...records].filter(r=>r.userId===user.id).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
   const isClockedIn=userRecs.length>0&&userRecs[0].type==="in";
   const allPairs=buildPairs(records,user.id);
@@ -781,7 +961,6 @@ function StaffView({user,records,onClock,innCoords,journalEntries,readEntries,on
 
   const handleClock=async(type)=>{
     if(type==="in"){
-      // Show selfie capture before clocking in
       pendingClockRef.current = type;
       setShowSelfie(true);
     } else {
@@ -977,7 +1156,12 @@ function AdminView({users,records,innCoords,onSaveCoords,onAddUser,onDeleteUser,
             </select>
             <button style={btnGhost} onClick={()=>exportCSV(records)}>⬇ Export CSV</button>
           </div>
-          <GroupedRecords pairs={allPairs.filter(p=>fu==="all"||p.userId===fu)} showBadge={true} showSelfie={true}/>
+          <GroupedRecords
+            pairs={allPairs.filter(p=>fu==="all"||p.userId===fu)}
+            showBadge={true}
+            showSelfie={true}
+            allPairsForGallery={allPairs}
+          />
         </div>
       )}
 
@@ -1016,15 +1200,60 @@ function AdminView({users,records,innCoords,onSaveCoords,onAddUser,onDeleteUser,
   );
 }
 
+// ── AdminLoginModal ────────────────────────────────────────────────────────────
+function AdminLoginModal({users, onLogin, onClose}){
+  const[lid,setLid]=useState("");
+  const[lpw,setLpw]=useState("");
+  const[lerr,setLerr]=useState("");
+
+  const handleLogin=()=>{
+    setLerr("");
+    const u=users.find(x=>x.username===lid.toLowerCase().trim());
+    if(!u){setLerr("Username not found.");return;}
+    if((u.pin||"0000")!==lpw){setLerr("Incorrect PIN.");return;}
+    onLogin({...u});
+  };
+
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",backdropFilter:"blur(4px)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:"2rem"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:24,padding:"2.4rem 2rem",width:"100%",maxWidth:360,boxShadow:"0 16px 64px rgba(0,0,0,0.18)"}}>
+        <div style={{textAlign:"center",marginBottom:"1.8rem"}}>
+          <div style={{fontSize:"1.5rem",marginBottom:"0.4rem"}}>🔐</div>
+          <div style={{fontWeight:600,fontSize:"1.1rem",color:C.text}}>Admin Login</div>
+          <div style={{color:C.muted,fontSize:"0.78rem",marginTop:"0.2rem"}}>Staff management & records</div>
+        </div>
+        <label style={{...lbl,marginTop:0}}>Username</label>
+        <input style={inp()} type="text" placeholder="admin" autoCapitalize="none" autoCorrect="off"
+          value={lid} onChange={e=>setLid(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()}/>
+        <label style={lbl}>PIN</label>
+        <input style={inp({fontFamily:"monospace",letterSpacing:"0.2em",fontSize:"1.1rem"})}
+          type="password" inputMode="numeric" pattern="[0-9]*" maxLength={6} placeholder="••••••"
+          value={lpw} onChange={e=>setLpw(e.target.value.replace(/\D/g,"").slice(0,6))}
+          onKeyDown={e=>e.key==="Enter"&&handleLogin()}/>
+        {lerr&&<p style={{color:C.red,fontSize:"0.8rem",textAlign:"center",marginTop:"0.65rem"}}>{lerr}</p>}
+        <button style={{...btnPrimary,width:"100%",padding:"0.82rem",marginTop:"1.4rem",fontSize:"0.95rem"}} onClick={handleLogin}>Sign In</button>
+        <button onClick={onClose} style={{...btnGhost,width:"100%",marginTop:"0.6rem",textAlign:"center"}}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 // ── KioskView ─────────────────────────────────────────────────────────────────
-function KioskView({users,records,onKioskClock,onExit}){
+function KioskView({users,records,onKioskClock,onAdminLogin}){
   const[selected,setSelected]=useState(null);
   const[pin,setPin]=useState("");
   const[error,setError]=useState("");
   const[confirmed,setConfirmed]=useState(null);
   const[activeLetter,setActiveLetter]=useState("ALL");
   const[showKioskSelfie,setShowKioskSelfie]=useState(null);
+  const[showAdminModal,setShowAdminModal]=useState(false);
+  const[now,setNow]=useState(new Date());
   const gridRef=useRef(null);
+
+  useEffect(()=>{
+    const t=setInterval(()=>setNow(new Date()),1000);
+    return()=>clearInterval(t);
+  },[]);
 
   const staffUsers=users.filter(u=>u.role==="staff").sort((a,b)=>a.name.localeCompare(b.name));
   const letters=["ALL",...[...new Set(staffUsers.map(u=>u.name[0].toUpperCase()))].sort()];
@@ -1045,7 +1274,6 @@ function KioskView({users,records,onKioskClock,onExit}){
         if(next===correctPin){
           const type=isClockedIn(selected.id)?"out":"in";
           if(type==="in"){
-            // Show selfie before clocking in
             setShowKioskSelfie({userId:selected.id,name:selected.name});
             setSelected(null);setPin("");
           } else {
@@ -1065,13 +1293,19 @@ function KioskView({users,records,onKioskClock,onExit}){
   const handleBack=()=>{setSelected(null);setPin("");setError("");};
   const KEYS=["1","2","3","4","5","6","7","8","9","","0","⌫"];
 
+  const timeStr=now.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
+  const dateStr=now.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"});
+  const clockedInCount=staffUsers.filter(u=>isClockedIn(u.id)).length;
+
   if(confirmed){
     const isIn=confirmed.type==="in";
     return(
-      <div style={{minHeight:"100vh",background:isIn?"#f0fdf4":"#fff5f5",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"1rem",fontFamily:"'DM Sans',sans-serif"}}>
-        <div style={{fontSize:"5rem"}}>{isIn?"✅":"👋"}</div>
-        <div style={{fontSize:"2rem",fontWeight:600,color:isIn?C.greenText:C.red}}>{confirmed.name}</div>
-        <div style={{fontSize:"1.2rem",color:isIn?C.greenText:C.red,fontWeight:500}}>{isIn?"Clocked In":"Clocked Out"} · {new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</div>
+      <div style={{height:"100vh",background:isIn?"#f0fdf4":"#fff5f5",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"1.2rem",fontFamily:"'DM Sans',sans-serif"}}>
+        <div style={{fontSize:"6rem",lineHeight:1}}>{isIn?"✅":"👋"}</div>
+        <div style={{fontSize:"2.5rem",fontWeight:600,color:isIn?C.greenText:C.red}}>{confirmed.name}</div>
+        <div style={{fontSize:"1.3rem",color:isIn?C.greenText:C.red,fontWeight:500,background:isIn?"rgba(40,205,65,0.1)":"rgba(255,59,48,0.08)",padding:"0.6rem 1.8rem",borderRadius:980}}>
+          {isIn?"Clocked In":"Clocked Out"} · {now.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}
+        </div>
       </div>
     );
   }
@@ -1079,43 +1313,43 @@ function KioskView({users,records,onKioskClock,onExit}){
   if(selected){
     const clocked=isClockedIn(selected.id);
     return(
-      <div style={{minHeight:"100vh",background:"#f5f5f7",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"2rem",fontFamily:"'DM Sans',sans-serif"}}>
-        <div style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:28,padding:"2.5rem 2rem",width:"100%",maxWidth:340,boxShadow:"0 4px 32px rgba(0,0,0,0.08)",textAlign:"center"}}>
-          <div style={{marginBottom:"1.8rem"}}>
-            <div style={{width:60,height:60,borderRadius:"50%",background:C.blue,color:"#fff",fontSize:"1.5rem",fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 0.75rem"}}>
+      <div style={{height:"100vh",background:"#f0f0f5",display:"flex",alignItems:"center",justifyContent:"center",padding:"2rem",fontFamily:"'DM Sans',sans-serif"}}>
+        <div style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:32,padding:"3rem 2.5rem",width:"100%",maxWidth:420,boxShadow:"0 8px 48px rgba(0,0,0,0.10)",textAlign:"center"}}>
+          <div style={{marginBottom:"2rem"}}>
+            <div style={{width:72,height:72,borderRadius:"50%",background:C.blue,color:"#fff",fontSize:"1.8rem",fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 0.9rem"}}>
               {selected.name[0]}
             </div>
-            <div style={{fontSize:"1.25rem",fontWeight:600,color:C.text}}>{selected.name}</div>
-            <div style={{display:"inline-flex",alignItems:"center",gap:"0.4rem",marginTop:"0.4rem",padding:"0.25rem 0.8rem",borderRadius:20,fontSize:"0.78rem",fontWeight:500,
+            <div style={{fontSize:"1.5rem",fontWeight:600,color:C.text}}>{selected.name}</div>
+            <div style={{display:"inline-flex",alignItems:"center",gap:"0.4rem",marginTop:"0.5rem",padding:"0.3rem 1rem",borderRadius:20,fontSize:"0.85rem",fontWeight:500,
               ...(clocked?{background:"rgba(40,205,65,0.1)",border:"1px solid rgba(40,205,65,0.28)",color:C.greenText}:{background:"#f5f5f7",border:"1px solid #e8e8ed",color:C.sub})}}>
-              <span style={{width:6,height:6,borderRadius:"50%",background:clocked?C.green:"#a1a1a6"}}></span>
+              <span style={{width:7,height:7,borderRadius:"50%",background:clocked?C.green:"#a1a1a6"}}></span>
               {clocked?"Currently Clocked In":"Not Clocked In"}
             </div>
           </div>
-          <div style={{fontSize:"0.82rem",color:C.sub,marginBottom:"1.2rem",fontWeight:500}}>
+          <div style={{fontSize:"0.95rem",color:C.sub,marginBottom:"1.4rem",fontWeight:500}}>
             Enter PIN to clock <strong style={{color:clocked?C.red:C.greenText}}>{clocked?"out":"in"}</strong>
           </div>
-          <div style={{display:"flex",gap:"0.9rem",justifyContent:"center",marginBottom:"0.6rem"}}>
+          <div style={{display:"flex",gap:"1.1rem",justifyContent:"center",marginBottom:"0.8rem"}}>
             {[0,1,2,3].map(i=>(
-              <div key={i} style={{width:14,height:14,borderRadius:"50%",background:i<pin.length?C.text:"#e8e8ed",transition:"background 0.12s"}}/>
+              <div key={i} style={{width:18,height:18,borderRadius:"50%",background:i<pin.length?C.text:"#e8e8ed",transition:"background 0.12s"}}/>
             ))}
           </div>
-          <div style={{minHeight:"1.6rem",marginBottom:"0.3rem"}}>
-            {error&&<p style={{color:C.red,fontSize:"0.8rem",margin:0}}>{error}</p>}
+          <div style={{minHeight:"1.8rem",marginBottom:"0.4rem"}}>
+            {error&&<p style={{color:C.red,fontSize:"0.88rem",margin:0}}>{error}</p>}
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"0.55rem",marginBottom:"1.3rem"}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"0.7rem",marginBottom:"1.6rem"}}>
             {KEYS.map((k,i)=>(
               k===""?<div key={i}/>:
               <button key={i} onClick={()=>k==="⌫"?handleDel():handleDigit(k)}
-                style={{background:k==="⌫"?"#f5f5f7":"#fff",border:"1px solid #e8e8ed",borderRadius:14,
-                  padding:"1rem 0",fontSize:k==="⌫"?"1.2rem":"1.35rem",fontWeight:k==="⌫"?400:500,
+                style={{background:k==="⌫"?"#f5f5f7":"#fff",border:"1px solid #e8e8ed",borderRadius:16,
+                  padding:"1.2rem 0",fontSize:k==="⌫"?"1.4rem":"1.55rem",fontWeight:k==="⌫"?400:500,
                   color:C.text,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",
-                  boxShadow:"0 1px 4px rgba(0,0,0,0.05)",lineHeight:1}}>
+                  boxShadow:"0 2px 8px rgba(0,0,0,0.06)",lineHeight:1,minHeight:64}}>
                 {k}
               </button>
             ))}
           </div>
-          <button onClick={handleBack} style={{background:"none",border:"none",color:C.muted,fontSize:"0.85rem",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
+          <button onClick={handleBack} style={{background:"none",border:"none",color:C.muted,fontSize:"0.95rem",cursor:"pointer",fontFamily:"'DM Sans',sans-serif",padding:"0.5rem 1rem"}}>
             ← Back to staff list
           </button>
         </div>
@@ -1123,13 +1357,8 @@ function KioskView({users,records,onKioskClock,onExit}){
     );
   }
 
-  const now=new Date();
-  const timeStr=now.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
-  const dateStr=now.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"});
-  const clockedInCount=staffUsers.filter(u=>isClockedIn(u.id)).length;
-
   return(
-    <div style={{minHeight:"100vh",background:"#f0f0f5",display:"flex",flexDirection:"column",fontFamily:"'DM Sans',sans-serif"}}>
+    <div style={{height:"100vh",background:"#f0f0f5",display:"flex",flexDirection:"column",fontFamily:"'DM Sans',sans-serif",overflow:"hidden"}}>
       {showKioskSelfie&&(
         <SelfieCapture
           userName={showKioskSelfie.name}
@@ -1149,52 +1378,57 @@ function KioskView({users,records,onKioskClock,onExit}){
           }}
         />
       )}
+      {showAdminModal&&(
+        <AdminLoginModal
+          users={users}
+          onLogin={(u)=>{setShowAdminModal(false);onAdminLogin(u);}}
+          onClose={()=>setShowAdminModal(false)}
+        />
+      )}
+
       {/* Header */}
-      <div style={{background:C.blue,padding:"0.85rem 1.5rem",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+      <div style={{background:C.blue,padding:"0.9rem 1.8rem",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
         <div>
-          <div style={{color:"#fff",fontSize:"1.1rem",fontWeight:600}}>Ocean Island Inn · Staff Kiosk</div>
-          <div style={{color:"rgba(255,255,255,0.75)",fontSize:"0.76rem"}}>{dateStr} · {timeStr}</div>
+          <div style={{color:"#fff",fontSize:"1.25rem",fontWeight:600,letterSpacing:"0.01em"}}>Ocean Island Inn</div>
+          <div style={{color:"rgba(255,255,255,0.7)",fontSize:"0.78rem",marginTop:"0.1rem"}}>{dateStr}</div>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:"1rem"}}>
-          <div style={{color:"rgba(255,255,255,0.85)",fontSize:"0.8rem"}}>
-            <span style={{fontWeight:600,color:"#fff"}}>{clockedInCount}</span> of {staffUsers.length} in
+        <div style={{display:"flex",alignItems:"center",gap:"1.5rem"}}>
+          <div style={{textAlign:"right"}}>
+            <div style={{color:"#fff",fontSize:"2rem",fontWeight:300,lineHeight:1,letterSpacing:"-0.02em"}}>{timeStr}</div>
+            <div style={{color:"rgba(255,255,255,0.65)",fontSize:"0.72rem",marginTop:"0.1rem"}}><span style={{fontWeight:600,color:"rgba(255,255,255,0.9)"}}>{clockedInCount}</span> of {staffUsers.length} staff in</div>
           </div>
-          <button onClick={onExit} style={{background:"rgba(255,255,255,0.18)",border:"1px solid rgba(255,255,255,0.3)",borderRadius:980,color:"#fff",padding:"0.38rem 0.9rem",fontSize:"0.8rem",fontWeight:500,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
-            Exit
-          </button>
         </div>
       </div>
 
       {/* Sub-header */}
-      <div style={{background:"#fff",borderBottom:"1px solid #e8e8ed",padding:"0.65rem 1.5rem",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <span style={{color:C.sub,fontSize:"0.84rem"}}>Select your name and enter your PIN</span>
-        <span style={{color:C.muted,fontSize:"0.78rem"}}>{filtered.length} staff shown</span>
+      <div style={{background:"#fff",borderBottom:"1px solid #e8e8ed",padding:"0.6rem 1.8rem",display:"flex",alignItems:"center",flexShrink:0}}>
+        <span style={{color:C.sub,fontSize:"0.88rem",fontWeight:500}}>Tap your name, then enter your PIN</span>
       </div>
 
-      {/* Main area */}
+      {/* Main area — staff grid + alphabet sidebar */}
       <div style={{display:"flex",flex:1,overflow:"hidden"}}>
         <div style={{flex:1,overflowY:"auto"}}>
-          {/* Staff grid */}
-          <div ref={gridRef} style={{padding:"0.75rem"}}>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:"0.65rem"}}>
+          <div ref={gridRef} style={{padding:"0.9rem"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(155px,1fr))",gap:"0.75rem"}}>
               {filtered.map(u=>{
                 const clocked=isClockedIn(u.id);
                 return(
                   <button key={u.id} onClick={()=>{setSelected(u);setPin("");setError("");}}
-                    style={{background:"#fff",border:`2px solid ${clocked?"rgba(40,205,65,0.4)":"#e8e8ed"}`,borderRadius:16,
-                      padding:"1.1rem 0.6rem 0.9rem",cursor:"pointer",fontFamily:"'DM Sans',sans-serif",
-                      boxShadow:clocked?"0 2px 12px rgba(40,205,65,0.14)":"0 1px 4px rgba(0,0,0,0.05)",
-                      textAlign:"center",transition:"transform 0.1s"}}>
-                    <div style={{width:42,height:42,borderRadius:"50%",
+                    style={{background:"#fff",border:`2px solid ${clocked?"rgba(40,205,65,0.45)":"#e8e8ed"}`,borderRadius:20,
+                      padding:"1.4rem 0.8rem 1.1rem",cursor:"pointer",fontFamily:"'DM Sans',sans-serif",
+                      boxShadow:clocked?"0 3px 16px rgba(40,205,65,0.16)":"0 1px 6px rgba(0,0,0,0.06)",
+                      textAlign:"center",transition:"transform 0.1s, box-shadow 0.1s",
+                      WebkitTapHighlightColor:"transparent"}}>
+                    <div style={{width:52,height:52,borderRadius:"50%",
                       background:clocked?"rgba(40,205,65,0.15)":"#f0f0f5",
                       color:clocked?C.greenText:"#888",
-                      fontSize:"1.1rem",fontWeight:700,
+                      fontSize:"1.3rem",fontWeight:700,
                       display:"flex",alignItems:"center",justifyContent:"center",
-                      margin:"0 auto 0.55rem",border:clocked?"2px solid rgba(40,205,65,0.3)":"2px solid transparent"}}>
+                      margin:"0 auto 0.65rem",border:clocked?"2px solid rgba(40,205,65,0.35)":"2px solid transparent"}}>
                       {u.name[0]}
                     </div>
-                    <div style={{fontSize:"0.88rem",fontWeight:600,color:C.text,lineHeight:1.25,marginBottom:"0.3rem",wordBreak:"break-word"}}>{u.name}</div>
-                    <div style={{fontSize:"0.64rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",color:clocked?C.greenText:C.muted}}>
+                    <div style={{fontSize:"0.95rem",fontWeight:600,color:C.text,lineHeight:1.25,marginBottom:"0.35rem",wordBreak:"break-word"}}>{u.name}</div>
+                    <div style={{fontSize:"0.67rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",color:clocked?C.greenText:C.muted}}>
                       {clocked?"● Clocked In":"○ Clocked Out"}
                     </div>
                   </button>
@@ -1204,19 +1438,30 @@ function KioskView({users,records,onKioskClock,onExit}){
           </div>
         </div>
 
-        {/* Alphabet sidebar */}
-        <div style={{width:68,background:"#fff",borderLeft:"1px solid #e8e8ed",display:"flex",flexDirection:"column",alignItems:"center",padding:"0.5rem 0",gap:"0.2rem",overflowY:"auto"}}>
+        {/* Alphabet sidebar — wider for tablet fingers */}
+        <div style={{width:76,background:"#fff",borderLeft:"1px solid #e8e8ed",display:"flex",flexDirection:"column",alignItems:"center",padding:"0.5rem 0",gap:"0.15rem",overflowY:"auto",flexShrink:0}}>
           {letters.map(l=>(
             <button key={l} onClick={()=>setActiveLetter(l)}
-              style={{width:46,padding:"0.45rem 0",borderRadius:10,border:"none",cursor:"pointer",
-                fontFamily:"'DM Sans',sans-serif",fontSize:l==="ALL"?"0.65rem":"0.88rem",fontWeight:600,
+              style={{width:54,padding:"0.5rem 0",borderRadius:10,border:"none",cursor:"pointer",
+                fontFamily:"'DM Sans',sans-serif",fontSize:l==="ALL"?"0.65rem":"0.95rem",fontWeight:600,
                 background:activeLetter===l?C.blue:"transparent",
                 color:activeLetter===l?"#fff":C.sub,
-                transition:"background 0.15s"}}>
+                transition:"background 0.15s",WebkitTapHighlightColor:"transparent"}}>
               {l}
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Footer */}
+      <div style={{background:"#fff",borderTop:"1px solid #e8e8ed",padding:"0.55rem 1.8rem",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+        <span style={{color:C.muted,fontSize:"0.72rem"}}>Made with ♥ at Ocean Island Inn</span>
+        <button onClick={()=>setShowAdminModal(true)}
+          style={{background:"none",border:"none",color:"rgba(180,180,185,0.7)",fontSize:"0.7rem",cursor:"pointer",
+            fontFamily:"'DM Sans',sans-serif",padding:"0.25rem 0.5rem",borderRadius:6,
+            letterSpacing:"0.03em",transition:"color 0.15s"}}>
+          Admin
+        </button>
       </div>
     </div>
   );
@@ -1224,20 +1469,9 @@ function KioskView({users,records,onKioskClock,onExit}){
 
 // ── Footer ────────────────────────────────────────────────────────────────────
 function Footer(){
-  const[shown,setShown]=useState(false);
   return(
-    <div style={{position:"fixed",bottom:0,left:0,right:0,background:"rgba(255,255,255,0.92)",backdropFilter:"blur(14px)",borderTop:"1px solid #e8e8ed",padding:"0.65rem 1.5rem",display:"flex",alignItems:"center",justifyContent:"center",zIndex:20}}>
-      <button onClick={()=>setShown(s=>!s)} style={{background:"none",border:"none",color:C.blue,fontSize:"0.83rem",fontWeight:500,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",display:"flex",alignItems:"center",gap:"0.4rem"}}>
-        📲 Add shortcut to your phone
-      </button>
-      {shown&&(
-        <div style={{position:"absolute",bottom:"calc(100% + 8px)",left:"50%",transform:"translateX(-50%)",background:"#fff",border:"1px solid #e8e8ed",borderRadius:18,padding:"1.3rem 1.5rem",width:290,boxShadow:"0 8px 36px rgba(0,0,0,0.12)"}}>
-          <p style={{fontWeight:600,color:C.text,fontSize:"0.92rem",marginBottom:"0.7rem"}}>Add to Home Screen</p>
-          <p style={{color:C.sub,fontSize:"0.82rem",lineHeight:1.6,marginBottom:"0.5rem"}}><strong>iPhone:</strong> Tap the Share icon in Safari → <em>"Add to Home Screen"</em></p>
-          <p style={{color:C.sub,fontSize:"0.82rem",lineHeight:1.6,marginBottom:"0.9rem"}}><strong>Android:</strong> Tap ⋮ in Chrome → <em>"Add to Home Screen"</em></p>
-          <button onClick={()=>setShown(false)} style={{...btnGhost,width:"100%",textAlign:"center"}}>Got it</button>
-        </div>
-      )}
+    <div style={{position:"fixed",bottom:0,left:0,right:0,background:"rgba(255,255,255,0.92)",backdropFilter:"blur(14px)",borderTop:"1px solid #e8e8ed",padding:"0.55rem 1.5rem",display:"flex",alignItems:"center",justifyContent:"center",zIndex:20}}>
+      <span style={{color:C.muted,fontSize:"0.72rem"}}>Made with ♥ at Ocean Island Inn</span>
     </div>
   );
 }
@@ -1250,7 +1484,7 @@ function App(){
   const[innCoords,setInnCoords]=useState(DEFAULT_INN);
   const[journalEntries,setJournalEntries]=useState([]);
   const[readEntries,setReadEntries]=useState([]);
-  const[showKiosk,setShowKiosk]=useState(false);
+  const[showKiosk,setShowKiosk]=useState(true);
   const[lid,setLid]=useState("");
   const[lpw,setLpw]=useState("");
   const[lerr,setLerr]=useState("");
@@ -1270,6 +1504,8 @@ function App(){
 
       us=us.map(u=>{
         if(u.role==="staff"&&u.pin===undefined)return{...u,pin:"0000"};
+        // Update admin PIN to 858525 if it's still the old value
+        if(u.id==="admin"&&(u.pin===""||u.pin==="0000"||!u.pin))return{...u,pin:"858525"};
         return u;
       });
       await Promise.all(us.map(u=>DB.upsertUser(u)));
@@ -1291,7 +1527,6 @@ function App(){
   const handleClock=useCallback(async(type,coords,onSite,selfieBlob)=>{
     const dev=await getDeviceInfo();
     const recId=mkId();
-    // Upload selfie first if provided, get URL
     let selfieUrl=null;
     if(selfieBlob){
       selfieUrl=await DB.uploadSelfie(recId, selfieBlob);
@@ -1300,7 +1535,6 @@ function App(){
     const rec={id:recId,userId:user.id,userName:user.name,type,timestamp:new Date().toISOString(),lat:coords?.lat??null,lng:coords?.lng??null,onSite,ip:dev.ip,deviceId:dev.deviceId,deviceType:dev.deviceType,selfieUrl};
     const updated=[...records,rec];setRecords(updated);await DB.insertRecord(rec);
     console.log("[Clock] insert done, selfieUrl was:", rec.selfieUrl);
-    // Auto-delete selfies older than 90 days (run quietly in background)
     if(type==="in") DB.deleteOldSelfies(90).catch(()=>{});
   },[user,records]);
 
@@ -1334,7 +1568,6 @@ function App(){
 
   const FONTS=`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap');`;
 
-  // Lock body scroll on login screen (prevents iOS Safari bounce/scroll)
   useEffect(()=>{
     if(!user && !showKiosk){
       document.body.classList.add('login-screen');
@@ -1354,28 +1587,29 @@ function App(){
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif"}}>
       <style>{FONTS}</style>
       {showKiosk?(
-        <KioskView users={users} records={records} onKioskClock={handleKioskClock} onExit={()=>setShowKiosk(false)}/>
+        <KioskView
+          users={users}
+          records={records}
+          onKioskClock={handleKioskClock}
+          onAdminLogin={(u)=>{setUser(u);setShowKiosk(false);}}
+        />
       ):!user?(
+        // Fallback login screen (shouldn't normally be reached)
         <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-start",padding:"2rem",paddingTop:"clamp(2rem, 12vh, 5rem)"}}>
           <div style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:24,padding:"2.8rem 2.4rem",width:"100%",maxWidth:385,boxShadow:"0 4px 32px rgba(0,0,0,0.08)"}}>
             <div style={{textAlign:"center",marginBottom:"2rem"}}>
               <div style={{fontFamily:"'DM Sans',sans-serif",fontSize:"1.75rem",fontWeight:400,color:C.text,letterSpacing:"0.02em",lineHeight:1.2}}>Ocean Island Inn</div>
               <p style={{color:C.muted,fontSize:"0.74rem",letterSpacing:"0.08em",textTransform:"uppercase",margin:"0.3rem 0 0"}}>Staff Time Clock</p>
             </div>
-
             <label style={{...lbl,marginTop:0}}>Username</label>
             <input style={inp()} type="text" placeholder="Enter username" autoCapitalize="none" autoCorrect="off" value={lid} onChange={e=>setLid(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()}/>
             <label style={lbl}>PIN</label>
             <input style={inp({fontFamily:"monospace",letterSpacing:"0.2em",fontSize:"1.1rem"})} type="password" inputMode="numeric" pattern="[0-9]*" maxLength={6} placeholder="••••" value={lpw} onChange={e=>setLpw(e.target.value.replace(/\D/g,"").slice(0,6))} onKeyDown={e=>e.key==="Enter"&&handleLogin()}/>
             {lerr&&<p style={{color:C.red,fontSize:"0.8rem",textAlign:"center",marginTop:"0.65rem"}}>{lerr}</p>}
             <button style={{...btnPrimary,width:"100%",padding:"0.82rem",marginTop:"1.4rem",fontSize:"0.95rem"}} onClick={handleLogin}>Sign In</button>
-
-
-
-            {/* Kiosk option */}
             <div style={{marginTop:"1.2rem",borderTop:"1px solid #e8e8ed",paddingTop:"1rem",textAlign:"center"}}>
-              <button onClick={()=>setShowKiosk(true)} style={{background:"none",border:"none",color:C.blue,fontSize:"0.82rem",fontWeight:500,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",display:"inline-flex",alignItems:"center",gap:"0.35rem"}}>
-                🖥 Use Staff Kiosk instead
+              <button onClick={()=>setShowKiosk(true)} style={{background:"none",border:"none",color:C.blue,fontSize:"0.82rem",fontWeight:500,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
+                ← Back to Kiosk
               </button>
             </div>
           </div>
@@ -1390,7 +1624,7 @@ function App(){
                 {user.name}
                 {user.role==="admin"&&<span style={{background:C.blue,color:"#fff",fontSize:"0.6rem",fontWeight:600,letterSpacing:"0.04em",textTransform:"uppercase",padding:"0.16rem 0.48rem",borderRadius:20,marginLeft:"0.4rem"}}>Admin</span>}
               </span>
-              <button style={btnGhost} onClick={()=>setUser(null)}>Sign Out</button>
+              <button style={btnGhost} onClick={()=>{setUser(null);setShowKiosk(true);}}>← Kiosk</button>
             </div>
           </header>
           {user.role==="admin"
