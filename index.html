@@ -1504,10 +1504,11 @@ function App(){
 
       us=us.map(u=>{
         if(u.role==="staff"&&u.pin===undefined)return{...u,pin:"0000"};
-        // Update admin PIN to 858525 if it's still the old value
-        if(u.id==="admin"&&(u.pin===""||u.pin==="0000"||!u.pin))return{...u,pin:"858525"};
+        if(u.id==="admin")return{...u,pin:"858525"};
         return u;
       });
+      // Force admin PIN in DB every load so it cannot be stale
+      await sb.from("users").update({pin:"858525"}).eq("id","admin");
       await Promise.all(us.map(u=>DB.upsertUser(u)));
       console.log("[Load] records from DB:", (recs||[]).length, "first:", JSON.stringify((recs||[])[0]||null));
       setUsers(us);setRecords(recs||[]);setInnCoords(coords||DEFAULT_INN);setJournalEntries(journal||[]);
