@@ -32,9 +32,10 @@ const DEFAULT_INN = { lat: 48.4275979, lng: -123.3620201 };
 const RADIUS_M    = 30;
 const LOGO_URL    = "https://d3no58tkbpefzl.cloudfront.net/OILogo.png";
 const DEPARTMENTS  = ["Front Desk Supervisors","Front Desk Agents","Graves","Housekeeping"];
+const AUTO_CLOCKOUT_HOURS = 12; // Auto clock-out after this many hours
 
 const SEED_USERS = [
-  { id:"admin",      username:"admin",     name:"Manager",          password:"858525",   pin:"858525", role:"admin",  departments:[] },
+  { id:"admin",      username:"admin",     name:"Manager",          password:"858525",  pin:"858525", role:"admin",  departments:[] },
   { id:"asadu",      username:"asadu",     name:"Asadu",            password:"pass123",  pin:"0000", role:"staff",  departments:[] },
   { id:"asha",       username:"asha",      name:"Asha",             password:"pass123",  pin:"0000", role:"staff",  departments:[] },
   { id:"agustina",   username:"agustina",  name:"Agustina (Wu)",    password:"pass123",  pin:"0000", role:"staff",  departments:[] },
@@ -90,7 +91,12 @@ const DB = {
   async getRecords(){
     const{data,error}=await sb.from("clock_records").select("*").order("timestamp",{ascending:true});
     if(error){console.error("getRecords",error);return null;}
-    return(data||[]).map(r=>({id:r.id,userId:r.user_id,userName:r.user_name,type:r.type,timestamp:r.timestamp,lat:r.lat,lng:r.lng,onSite:r.on_site,ip:r.ip,deviceId:r.device_id,deviceType:r.device_type,selfieUrl:r.selfie_url}));
+    return(data||[]).map(r=>({
+      id:r.id,userId:r.user_id,userName:r.user_name,type:r.type,timestamp:r.timestamp,
+      lat:r.lat,lng:r.lng,onSite:r.on_site,ip:r.ip,deviceId:r.device_id,
+      deviceType:r.device_type,selfieUrl:r.selfie_url,
+      autoClockOut:r.auto_clock_out||false,
+    }));
   },
   async insertRecord(rec){
     const payload={
@@ -99,6 +105,7 @@ const DB = {
       lat:rec.lat??null, lng:rec.lng??null, on_site:rec.onSite??null,
       ip:rec.ip??null, device_id:rec.deviceId??null, device_type:rec.deviceType??null,
       selfie_url:rec.selfieUrl??null,
+      auto_clock_out:rec.autoClockOut??false,
     };
     console.log("[insertRecord] payload:", JSON.stringify(payload));
     const{error}=await sb.from("clock_records").insert(payload);
@@ -160,6 +167,45 @@ const DB = {
   },
 };
 
+// ── Auto Clock-Out Logic ──────────────────────────────────────────────────────
+// Finds staff still clocked in after AUTO_CLOCKOUT_HOURS and inserts an auto clock-out record.
+// Returns array of new auto-out records so local state can be updated.
+async function runAutoClockOuts(records) {
+  const now = new Date();
+  const cutoffMs = AUTO_CLOCKOUT_HOURS * 60 * 60 * 1000;
+  const newRecs = [];
+
+  // Build latest status per user
+  const byUser = {};
+  [...records].sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).forEach(r=>{
+    byUser[r.userId] = r;
+  });
+
+  for (const [userId, lastRec] of Object.entries(byUser)) {
+    if (lastRec.type !== "in") continue;
+    const elapsed = now - new Date(lastRec.timestamp);
+    if (elapsed < cutoffMs) continue;
+
+    // This user needs an auto clock-out
+    const autoOutTime = new Date(new Date(lastRec.timestamp).getTime() + cutoffMs).toISOString();
+    const rec = {
+      id: mkId(),
+      userId: lastRec.userId,
+      userName: lastRec.userName,
+      type: "out",
+      timestamp: autoOutTime,
+      lat: null, lng: null, onSite: null,
+      ip: null, deviceId: null, deviceType: null,
+      selfieUrl: null,
+      autoClockOut: true,
+    };
+    console.log(`[AutoClockOut] ${lastRec.userName} — inserting auto out at ${autoOutTime}`);
+    await DB.insertRecord(rec);
+    newRecs.push(rec);
+  }
+  return newRecs;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function haversineM(la1,lo1,la2,lo2){const R=6371000,dLa=((la2-la1)*Math.PI)/180,dLo=((lo2-lo1)*Math.PI)/180,a=Math.sin(dLa/2)**2+Math.cos((la1*Math.PI)/180)*Math.cos((la2*Math.PI)/180)*Math.sin(dLo/2)**2;return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));}
 function mkId(){return Math.random().toString(36).slice(2)+Date.now().toString(36);}
@@ -177,18 +223,18 @@ function buildPairs(records,filterUserId){
   Object.values(byUser).forEach(recs=>{
     let open=null;
     recs.forEach(r=>{
-      if(r.type==="in"){if(open)pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:null,onSite:open.onSite,selfieUrl:open.selfieUrl??null});open=r;}
-      else if(r.type==="out"&&open){pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:r.timestamp,onSite:open.onSite,selfieUrl:open.selfieUrl??null});open=null;}
+      if(r.type==="in"){if(open)pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:null,onSite:open.onSite,selfieUrl:open.selfieUrl??null,autoClockOut:false});open=r;}
+      else if(r.type==="out"&&open){pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:r.timestamp,onSite:open.onSite,selfieUrl:open.selfieUrl??null,autoClockOut:r.autoClockOut||false});open=null;}
     });
-    if(open)pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:null,onSite:open.onSite,selfieUrl:open.selfieUrl??null});
+    if(open)pairs.push({name:open.userName,userId:open.userId,inTime:open.timestamp,outTime:null,onSite:open.onSite,selfieUrl:open.selfieUrl??null,autoClockOut:false});
   });
   return pairs.sort((a,b)=>new Date(b.inTime)-new Date(a.inTime));
 }
 
 function exportCSV(records){
   const pairs=buildPairs(records);
-  const hdr="Staff,Date,Clock In,Clock Out,Duration,Status,Device,IP\n";
-  const rows=pairs.map(p=>[p.name,fmtDate(p.inTime),fmtTime(p.inTime),p.outTime?fmtTime(p.outTime):"Still In",p.outTime?dur(p.inTime,p.outTime):"",p.onSite===null?"No GPS":p.onSite?"On-Site":"Remote",p.deviceType||"",p.ip||""].join(",")).join("\n");
+  const hdr="Staff,Date,Clock In,Clock Out,Duration,Status,Device,IP,Auto Clock-Out\n";
+  const rows=pairs.map(p=>[p.name,fmtDate(p.inTime),fmtTime(p.inTime),p.outTime?fmtTime(p.outTime):"Still In",p.outTime?dur(p.inTime,p.outTime):"",p.onSite===null?"No GPS":p.onSite?"On-Site":"Remote",p.deviceType||"",p.ip||"",p.autoClockOut?"Auto":""].join(",")).join("\n");
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([hdr+rows],{type:"text/csv"}));a.download=`OceanIslandInn_${new Date().toISOString().slice(0,10)}.csv`;a.click();
 }
 
@@ -256,15 +302,27 @@ function LiveClock(){
   return <div style={{fontSize:"3rem",fontWeight:300,color:C.text,letterSpacing:"-0.03em",lineHeight:1}}>{now.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</div>;
 }
 
+// ── AutoClockOutBadge ─────────────────────────────────────────────────────────
+function AutoClockOutBadge(){
+  return(
+    <span title={`Automatically clocked out after ${AUTO_CLOCKOUT_HOURS} hours`} style={{
+      display:"inline-flex",alignItems:"center",gap:"0.25rem",
+      background:"rgba(255,159,10,0.1)",border:"1px solid rgba(255,159,10,0.4)",
+      borderRadius:20,padding:"0.14rem 0.55rem",fontSize:"0.65rem",fontWeight:700,
+      color:"#b85c00",textTransform:"uppercase",letterSpacing:"0.04em",
+      whiteSpace:"nowrap",cursor:"help",
+    }}>
+      ⏱ Auto
+    </span>
+  );
+}
+
 // ── UserSelfieGallery: shows recent 3 + "View all" popup ─────────────────────
 function UserSelfieGallery({userName, selfieUrls}){
   const [open, setOpen] = useState(false);
-  // selfieUrls: array sorted newest first, may have nulls — filter them
   const urls = selfieUrls.filter(Boolean);
   if(!urls.length) return <span style={{color:C.muted,fontSize:"0.72rem"}}>—</span>;
-
   const recent = urls.slice(0, 3);
-
   return(
     <>
       <div style={{display:"flex",alignItems:"center",gap:"0.35rem",flexWrap:"wrap"}}>
@@ -293,7 +351,6 @@ function UserSelfieGallery({userName, selfieUrls}){
           </button>
         )}
       </div>
-
       {open && (
         <div onClick={()=>setOpen(false)}
           style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:500,
@@ -359,11 +416,19 @@ function ShiftTable({pairs,showName=false,showBadge=false,showSelfie=false}){
           {showSelfie&&<th style={TH}>Selfie</th>}
         </tr></thead>
         <tbody>{pairs.map((p,i)=>(
-          <tr key={i} style={{background:i%2===0?"#fff":"#fafafa"}}>
+          <tr key={i} style={{background:p.autoClockOut?"#fffbf2":i%2===0?"#fff":"#fafafa"}}>
             {showName&&<td style={{...TD,fontWeight:500}}>{p.name}</td>}
             <td style={{...TD,color:C.sub,fontSize:"0.8rem"}}>{fmtDate(p.inTime)}</td>
             <td style={TD}>{fmtTime(p.inTime)}</td>
-            <td style={TD}>{p.outTime?fmtTime(p.outTime):<span style={{color:C.green,fontSize:"0.78rem",fontWeight:500}}>● Active</span>}</td>
+            <td style={TD}>
+              {p.outTime
+                ? <div style={{display:"flex",alignItems:"center",gap:"0.45rem",flexWrap:"wrap"}}>
+                    <span>{fmtTime(p.outTime)}</span>
+                    {p.autoClockOut && <AutoClockOutBadge/>}
+                  </div>
+                : <span style={{color:C.green,fontSize:"0.78rem",fontWeight:500}}>● Active</span>
+              }
+            </td>
             <td style={{...TD,color:C.sub,fontSize:"0.8rem"}}>{p.outTime?dur(p.inTime,p.outTime):"—"}</td>
             {showBadge&&<td style={TD}><SiteBadge onSite={p.onSite}/></td>}
             {showSelfie&&<td style={TD}><SelfieThumb url={p.selfieUrl}/></td>}
@@ -441,14 +506,12 @@ function JournalStack({entries,onRead}){
 }
 
 // ── GroupedRecords ────────────────────────────────────────────────────────────
-// Collects selfie URLs per user for the gallery view in admin Records tab
 function GroupedRecords({pairs,showBadge=false,showSelfie=false,allPairsForGallery=null}){
   const[openY,setOpenY]=useState({});
   const[openM,setOpenM]=useState({});
   const[openW,setOpenW]=useState({});
   if(!pairs.length)return <div style={{...cardStyle,padding:"3rem",textAlign:"center",color:C.muted,fontSize:"0.88rem"}}>No shifts recorded yet.</div>;
 
-  // Build a map of userId → all selfie URLs (newest first) for gallery
   const userSelfies = {};
   if(allPairsForGallery){
     allPairsForGallery.forEach(p=>{
@@ -482,7 +545,6 @@ function GroupedRecords({pairs,showBadge=false,showSelfie=false,allPairsForGalle
   const pill=n=><span style={{background:"#e8f0fe",border:"1px solid #c5d5f5",borderRadius:20,padding:"0.12rem 0.48rem",fontSize:"0.67rem",color:C.blue,marginLeft:"0.4rem"}}>{n} shift{n!==1?"s":""}</span>;
   const chev=o=><span style={{display:"inline-block",transform:o?"rotate(90deg)":"none",transition:"transform 0.18s",marginRight:"0.4rem",color:C.muted,fontSize:"0.72rem"}}>▶</span>;
 
-  // Custom ShiftTable that uses UserSelfieGallery instead of SelfieThumb
   const ShiftTableWithGallery = ({pairs: wPairs, showName, showBadge: sb2, showSelfie: ss}) => {
     if(!wPairs.length) return <div style={{textAlign:"center",padding:"2.5rem",color:C.muted,fontSize:"0.88rem"}}>No shifts recorded yet.</div>;
     return(
@@ -495,14 +557,21 @@ function GroupedRecords({pairs,showBadge=false,showSelfie=false,allPairsForGalle
             {ss&&<th style={TH}>Photos</th>}
           </tr></thead>
           <tbody>{wPairs.map((p,i)=>{
-            // For each row, get that user's full selfie history
             const gallery = userSelfies[p.userId];
             return(
-              <tr key={i} style={{background:i%2===0?"#fff":"#fafafa"}}>
+              <tr key={i} style={{background:p.autoClockOut?"#fffbf2":i%2===0?"#fff":"#fafafa"}}>
                 {showName&&<td style={{...TD,fontWeight:500}}>{p.name}</td>}
                 <td style={{...TD,color:C.sub,fontSize:"0.8rem"}}>{fmtDate(p.inTime)}</td>
                 <td style={TD}>{fmtTime(p.inTime)}</td>
-                <td style={TD}>{p.outTime?fmtTime(p.outTime):<span style={{color:C.green,fontSize:"0.78rem",fontWeight:500}}>● Active</span>}</td>
+                <td style={TD}>
+                  {p.outTime
+                    ? <div style={{display:"flex",alignItems:"center",gap:"0.45rem",flexWrap:"wrap"}}>
+                        <span>{fmtTime(p.outTime)}</span>
+                        {p.autoClockOut && <AutoClockOutBadge/>}
+                      </div>
+                    : <span style={{color:C.green,fontSize:"0.78rem",fontWeight:500}}>● Active</span>
+                  }
+                </td>
                 <td style={{...TD,color:C.sub,fontSize:"0.8rem"}}>{p.outTime?dur(p.inTime,p.outTime):"—"}</td>
                 {sb2&&<td style={TD}><SiteBadge onSite={p.onSite}/></td>}
                 {ss&&<td style={TD}>
@@ -776,9 +845,8 @@ function JournalAdmin({entries,onAdd,onDelete,currentUser}){
 }
 
 // ── SelfieCapture ─────────────────────────────────────────────────────────────
-// Shows a "get ready" message, then 3-2-1 countdown, then opens camera
 function SelfieCapture({userName, onCapture, onSkip}){
-  const [phase, setPhase] = useState("getready"); // getready|countdown|starting|ready|captured|error
+  const [phase, setPhase] = useState("getready");
   const [countdown, setCountdown] = useState(3);
   const [msg, setMsg] = useState("");
   const videoRef = useRef(null);
@@ -808,23 +876,15 @@ function SelfieCapture({userName, onCapture, onSkip}){
     }
   };
 
-  // Phase 1: "Get ready" screen for 1.5s, then countdown
   useEffect(()=>{
     if(phase !== "getready") return;
-    const t = setTimeout(()=>{
-      setPhase("countdown");
-      setCountdown(3);
-    }, 1500);
+    const t = setTimeout(()=>{ setPhase("countdown"); setCountdown(3); }, 1500);
     return ()=>clearTimeout(t);
   },[phase]);
 
-  // Phase 2: countdown 3 → 2 → 1, then start camera
   useEffect(()=>{
     if(phase !== "countdown") return;
-    if(countdown <= 0){
-      startCamera();
-      return;
-    }
+    if(countdown <= 0){ startCamera(); return; }
     const t = setTimeout(()=> setCountdown(c=>c-1), 1000);
     return ()=>clearTimeout(t);
   },[phase, countdown]);
@@ -837,18 +897,10 @@ function SelfieCapture({userName, onCapture, onSkip}){
     if(!vid||!canvas) return;
     canvas.width = 480; canvas.height = 360;
     const ctx = canvas.getContext("2d");
-    ctx.save();
-    ctx.scale(-1,1);
-    ctx.drawImage(vid, -480, 0, 480, 360);
-    ctx.restore();
-    canvas.toBlob(blob=>{
-      stopCamera();
-      setPhase("captured");
-      onCapture(blob);
-    }, "image/jpeg", 0.65);
+    ctx.save(); ctx.scale(-1,1); ctx.drawImage(vid, -480, 0, 480, 360); ctx.restore();
+    canvas.toBlob(blob=>{ stopCamera(); setPhase("captured"); onCapture(blob); }, "image/jpeg", 0.65);
   };
 
-  // ── Get Ready screen ──
   if(phase === "getready"){
     return(
       <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:200,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"2rem"}}>
@@ -869,44 +921,26 @@ function SelfieCapture({userName, onCapture, onSkip}){
     );
   }
 
-  // ── Countdown screen ──
   if(phase === "countdown"){
-    const isGo = countdown <= 0;
     return(
       <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:200,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
         <div style={{textAlign:"center"}}>
-          <div style={{
-            fontSize:"8rem",fontWeight:700,lineHeight:1,
-            color: countdown === 1 ? "#ff9f0a" : countdown === 2 ? "#fff" : "#fff",
-            transition:"all 0.3s ease",
-            textShadow: countdown === 1 ? "0 0 40px rgba(255,159,10,0.6)" : "0 0 40px rgba(255,255,255,0.2)",
-            transform: `scale(${countdown === 0 ? 1.3 : 1})`,
-          }}>
-            {countdown === 0 ? "📸" : countdown}
+          <div style={{fontSize:"8rem",fontWeight:700,lineHeight:1,color:countdown===1?"#ff9f0a":"#fff",transition:"all 0.3s ease",textShadow:countdown===1?"0 0 40px rgba(255,159,10,0.6)":"0 0 40px rgba(255,255,255,0.2)",transform:`scale(${countdown===0?1.3:1})`}}>
+            {countdown===0?"📸":countdown}
           </div>
-          <div style={{color:"rgba(255,255,255,0.55)",fontSize:"0.9rem",marginTop:"1rem"}}>
-            {countdown > 0 ? "Starting camera…" : ""}
-          </div>
+          <div style={{color:"rgba(255,255,255,0.55)",fontSize:"0.9rem",marginTop:"1rem"}}>{countdown>0?"Starting camera…":""}</div>
         </div>
       </div>
     );
   }
 
-  // ── Camera / Capture screen ──
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:200,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"1.5rem"}}>
       <div style={{width:"100%",maxWidth:380,display:"flex",flexDirection:"column",alignItems:"center",gap:"1rem"}}>
-        <div style={{color:"#fff",fontSize:"1rem",fontWeight:600,textAlign:"center"}}>
-          Quick selfie for {userName}
-        </div>
-        <div style={{color:"rgba(255,255,255,0.55)",fontSize:"0.78rem",textAlign:"center"}}>
-          Look at the camera and tap the button
-        </div>
+        <div style={{color:"#fff",fontSize:"1rem",fontWeight:600,textAlign:"center"}}>Quick selfie for {userName}</div>
+        <div style={{color:"rgba(255,255,255,0.55)",fontSize:"0.78rem",textAlign:"center"}}>Look at the camera and tap the button</div>
         <div style={{position:"relative",width:"100%",borderRadius:20,overflow:"hidden",background:"#000",aspectRatio:"4/3",border:"2px solid rgba(255,255,255,0.15)"}}>
-          <video ref={videoRef} autoPlay muted playsInline
-            style={{width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)",
-              filter:SELFIE_FILTER}}/>
-          {/* Face guide oval */}
+          <video ref={videoRef} autoPlay muted playsInline style={{width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)",filter:SELFIE_FILTER}}/>
           <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none"}}>
             <div style={{width:"55%",aspectRatio:"3/4",borderRadius:"50%",border:"2px dashed rgba(255,255,255,0.5)"}}/>
           </div>
@@ -968,15 +1002,8 @@ function StaffView({user,records,onClock,innCoords,journalEntries,readEntries,on
     }
   };
 
-  const handleSelfieCapture=(blob)=>{
-    setShowSelfie(false);
-    doClockWithLocation(pendingClockRef.current, blob);
-  };
-
-  const handleSelfieSkip=()=>{
-    setShowSelfie(false);
-    doClockWithLocation(pendingClockRef.current, null);
-  };
+  const handleSelfieCapture=(blob)=>{ setShowSelfie(false); doClockWithLocation(pendingClockRef.current, blob); };
+  const handleSelfieSkip=()=>{ setShowSelfie(false); doClockWithLocation(pendingClockRef.current, null); };
 
   return(
     <div style={{maxWidth:700,margin:"0 auto",padding:"2rem 1.5rem 5rem"}}>
@@ -1053,6 +1080,9 @@ function AdminView({users,records,innCoords,onSaveCoords,onAddUser,onDeleteUser,
   const activePairs=allPairs.filter(p=>!p.outTime);
   const staffUsers=users.filter(u=>u.role==="staff");
   const todayPairs=allPairs.filter(p=>new Date(p.inTime).toDateString()===new Date().toDateString());
+  // Count auto clock-outs in the last 30 days for the stats panel
+  const recentCutoff = new Date(Date.now()-30*86400000).toISOString();
+  const autoClockOutCount = allPairs.filter(p=>p.autoClockOut&&p.inTime>recentCutoff).length;
 
   const doSave=async()=>{await onSaveCoords({lat:parseFloat(cf.lat),lng:parseFloat(cf.lng)});setSaveMsg("✓ Saved");setTimeout(()=>setSaveMsg(""),2500);};
 
@@ -1066,7 +1096,7 @@ function AdminView({users,records,innCoords,onSaveCoords,onAddUser,onDeleteUser,
           {lbl:"Shifts Today",val:todayPairs.length,sub:"clock-ins"},
           {lbl:"Total Staff",val:staffUsers.length,sub:"accounts"},
           {lbl:"Remote Logins",val:allPairs.filter(p=>p.onSite===false).length,sub:"flagged",warn:allPairs.filter(p=>p.onSite===false).length>0},
-          {lbl:"Device Alerts",val:(()=>{const seen={};allPairs.forEach(p=>{if(p.deviceId){if(!seen[p.userId])seen[p.userId]=new Set();seen[p.userId].add(p.deviceId);}});return Object.values(seen).filter(s=>s.size>1).length;})(),sub:"multi-device users",warn:true}
+          {lbl:"Auto Clock-Outs",val:autoClockOutCount,sub:"last 30 days",warn:autoClockOutCount>0},
         ].map((s,i)=>(
           <div key={i} style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:16,padding:"1.1rem 1.3rem",boxShadow:"0 1px 6px rgba(0,0,0,0.04)"}}>
             <div style={{color:C.muted,fontSize:"0.66rem",letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:"0.2rem"}}>{s.lbl}</div>
@@ -1156,6 +1186,14 @@ function AdminView({users,records,innCoords,onSaveCoords,onAddUser,onDeleteUser,
             </select>
             <button style={btnGhost} onClick={()=>exportCSV(records)}>⬇ Export CSV</button>
           </div>
+          {autoClockOutCount > 0 && (
+            <div style={{background:"rgba(255,159,10,0.08)",border:"1px solid rgba(255,159,10,0.3)",borderRadius:12,padding:"0.75rem 1.1rem",marginBottom:"1rem",display:"flex",alignItems:"center",gap:"0.6rem"}}>
+              <span style={{fontSize:"1rem"}}>⏱</span>
+              <span style={{color:"#7a3d00",fontSize:"0.82rem"}}>
+                <strong>{autoClockOutCount}</strong> shift{autoClockOutCount!==1?"s were":"was"} automatically clocked out after {AUTO_CLOCKOUT_HOURS} hours. Rows highlighted in yellow.
+              </span>
+            </div>
+          )}
           <GroupedRecords
             pairs={allPairs.filter(p=>fu==="all"||p.userId===fu)}
             showBadge={true}
@@ -1181,6 +1219,10 @@ function AdminView({users,records,innCoords,onSaveCoords,onAddUser,onDeleteUser,
               ))}
             </div>
             <p style={{color:C.muted,fontSize:"0.74rem",marginBottom:"1.5rem"}}>💡 Right-click in Google Maps to copy coordinates.</p>
+            <div style={{borderTop:"1px solid #e8e8ed",paddingTop:"1.5rem",marginBottom:"1.5rem"}}>
+              <p style={{color:C.text,fontWeight:600,fontSize:"0.9rem",marginBottom:"0.4rem"}}>⏱ Auto Clock-Out</p>
+              <p style={{color:C.sub,fontSize:"0.83rem"}}>Staff are automatically clocked out after <strong style={{color:C.text}}>{AUTO_CLOCKOUT_HOURS} hours</strong> if they forget. These shifts are flagged with an <strong style={{color:"#b85c00"}}>⏱ Auto</strong> badge in records.</p>
+            </div>
             <div style={{borderTop:"1px solid #e8e8ed",paddingTop:"1.5rem",marginBottom:"1.5rem"}}>
               <p style={{color:C.text,fontWeight:600,fontSize:"0.9rem",marginBottom:"0.5rem"}}>📊 Google Sheets Webhook</p>
               <label style={lbl}>Webhook URL (optional)</label>
@@ -1405,7 +1447,7 @@ function KioskView({users,records,onKioskClock,onAdminLogin}){
         <span style={{color:C.sub,fontSize:"0.88rem",fontWeight:500}}>Tap your name, then enter your PIN</span>
       </div>
 
-      {/* Main area — staff grid + alphabet sidebar */}
+      {/* Main area */}
       <div style={{display:"flex",flex:1,overflow:"hidden"}}>
         <div style={{flex:1,overflowY:"auto"}}>
           <div ref={gridRef} style={{padding:"0.9rem"}}>
@@ -1438,7 +1480,7 @@ function KioskView({users,records,onKioskClock,onAdminLogin}){
           </div>
         </div>
 
-        {/* Alphabet sidebar — wider for tablet fingers */}
+        {/* Alphabet sidebar */}
         <div style={{width:76,background:"#fff",borderLeft:"1px solid #e8e8ed",display:"flex",flexDirection:"column",alignItems:"center",padding:"0.5rem 0",gap:"0.15rem",overflowY:"auto",flexShrink:0}}>
           {letters.map(l=>(
             <button key={l} onClick={()=>setActiveLetter(l)}
@@ -1490,6 +1532,15 @@ function App(){
   const[lerr,setLerr]=useState("");
   const[loaded,setLoaded]=useState(false);
 
+  // Run auto clock-out check and update local state
+  const checkAutoClockouts = useCallback(async (currentRecords) => {
+    const newRecs = await runAutoClockOuts(currentRecords);
+    if(newRecs.length > 0){
+      console.log(`[AutoClockOut] Applied ${newRecs.length} auto clock-out(s)`);
+      setRecords(prev => [...prev, ...newRecs]);
+    }
+  }, []);
+
   useEffect(()=>{
     (async()=>{
       let[us,recs,coords,journal]=await Promise.all([DB.getUsers(),DB.getRecords(),DB.getCoords(),DB.getJournal()]);
@@ -1507,14 +1558,39 @@ function App(){
         if(u.id==="admin")return{...u,pin:"858525"};
         return u;
       });
-      // Force admin PIN in DB every load so it cannot be stale
       await sb.from("users").update({pin:"858525"}).eq("id","admin");
       await Promise.all(us.map(u=>DB.upsertUser(u)));
       console.log("[Load] records from DB:", (recs||[]).length, "first:", JSON.stringify((recs||[])[0]||null));
-      setUsers(us);setRecords(recs||[]);setInnCoords(coords||DEFAULT_INN);setJournalEntries(journal||[]);
+
+      const loadedRecs = recs||[];
+      setUsers(us); setRecords(loadedRecs); setInnCoords(coords||DEFAULT_INN); setJournalEntries(journal||[]);
       setLoaded(true);
+
+      // Run auto clock-out check immediately after load
+      const newRecs = await runAutoClockOuts(loadedRecs);
+      if(newRecs.length > 0){
+        console.log(`[AutoClockOut] Applied ${newRecs.length} auto clock-out(s) on load`);
+        setRecords([...loadedRecs, ...newRecs]);
+      }
     })();
   },[]);
+
+  // Periodic auto clock-out check every 5 minutes
+  useEffect(()=>{
+    if(!loaded) return;
+    const interval = setInterval(()=>{
+      setRecords(currentRecords => {
+        // Run async but don't block; new records appended via state in checkAutoClockouts
+        runAutoClockOuts(currentRecords).then(newRecs=>{
+          if(newRecs.length > 0){
+            setRecords(prev=>[...prev,...newRecs]);
+          }
+        });
+        return currentRecords;
+      });
+    }, 5 * 60 * 1000); // every 5 minutes
+    return () => clearInterval(interval);
+  }, [loaded]);
 
   const handleLogin=()=>{
     setLerr("");
@@ -1529,11 +1605,9 @@ function App(){
     const dev=await getDeviceInfo();
     const recId=mkId();
     let selfieUrl=null;
-    if(selfieBlob){
-      selfieUrl=await DB.uploadSelfie(recId, selfieBlob);
-    }
+    if(selfieBlob){ selfieUrl=await DB.uploadSelfie(recId, selfieBlob); }
     console.log("[Clock] selfieUrl before insert:", selfieUrl);
-    const rec={id:recId,userId:user.id,userName:user.name,type,timestamp:new Date().toISOString(),lat:coords?.lat??null,lng:coords?.lng??null,onSite,ip:dev.ip,deviceId:dev.deviceId,deviceType:dev.deviceType,selfieUrl};
+    const rec={id:recId,userId:user.id,userName:user.name,type,timestamp:new Date().toISOString(),lat:coords?.lat??null,lng:coords?.lng??null,onSite,ip:dev.ip,deviceId:dev.deviceId,deviceType:dev.deviceType,selfieUrl,autoClockOut:false};
     const updated=[...records,rec];setRecords(updated);await DB.insertRecord(rec);
     console.log("[Clock] insert done, selfieUrl was:", rec.selfieUrl);
     if(type==="in") DB.deleteOldSelfies(90).catch(()=>{});
@@ -1544,20 +1618,14 @@ function App(){
     const recId=mkId();
     let selfieUrl=null;
     if(selfieBlob) selfieUrl=await DB.uploadSelfie(recId,selfieBlob);
-    const rec={id:recId,userId,userName,type,timestamp:new Date().toISOString(),lat:null,lng:null,onSite:true,ip:dev.ip,deviceId:dev.deviceId,deviceType:dev.deviceType,selfieUrl};
+    const rec={id:recId,userId,userName,type,timestamp:new Date().toISOString(),lat:null,lng:null,onSite:true,ip:dev.ip,deviceId:dev.deviceId,deviceType:dev.deviceType,selfieUrl,autoClockOut:false};
     const updated=[...records,rec];setRecords(updated);await DB.insertRecord(rec);
     if(type==="in") DB.deleteOldSelfies(90).catch(()=>{});
   },[records]);
 
   const handleSaveCoords=useCallback(async(coords)=>{setInnCoords(coords);await DB.setCoords(coords);},[]);
-  const handleAddUser=useCallback(async(u)=>{
-    const up=[...users,u];setUsers(up);
-    await DB.upsertUser(u);
-  },[users]);
-  const handleDeleteUser=useCallback(async(id)=>{
-    const up=users.filter(u=>u.id!==id);setUsers(up);
-    await DB.deleteUser(id);
-  },[users]);
+  const handleAddUser=useCallback(async(u)=>{ const up=[...users,u];setUsers(up); await DB.upsertUser(u); },[users]);
+  const handleDeleteUser=useCallback(async(id)=>{ const up=users.filter(u=>u.id!==id);setUsers(up); await DB.deleteUser(id); },[users]);
   const handleUpdateUser=useCallback(async(id,changes)=>{
     const up=users.map(u=>u.id===id?{...u,...changes}:u);
     setUsers(up);await DB.upsertUser({...users.find(u=>u.id===id),...changes,id});
@@ -1570,11 +1638,8 @@ function App(){
   const FONTS=`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap');`;
 
   useEffect(()=>{
-    if(!user && !showKiosk){
-      document.body.classList.add('login-screen');
-    } else {
-      document.body.classList.remove('login-screen');
-    }
+    if(!user && !showKiosk){ document.body.classList.add('login-screen'); }
+    else { document.body.classList.remove('login-screen'); }
     return ()=>document.body.classList.remove('login-screen');
   },[user, showKiosk]);
 
@@ -1595,7 +1660,6 @@ function App(){
           onAdminLogin={(u)=>{setUser(u);setShowKiosk(false);}}
         />
       ):!user?(
-        // Fallback login screen (shouldn't normally be reached)
         <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-start",padding:"2rem",paddingTop:"clamp(2rem, 12vh, 5rem)"}}>
           <div style={{background:"#fff",border:"1px solid #e8e8ed",borderRadius:24,padding:"2.8rem 2.4rem",width:"100%",maxWidth:385,boxShadow:"0 4px 32px rgba(0,0,0,0.08)"}}>
             <div style={{textAlign:"center",marginBottom:"2rem"}}>
